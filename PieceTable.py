@@ -1,9 +1,11 @@
 class _Piece:
     def __init__(self, in_added, offset, length):
-        """Here the basic unit is piece which will contain characters or bytes.
-        is_original(bool): checks whether the added sequence is part of original file or added file
+        """
+        Here the basic unit is piece which will contain characters or bytes.
+        in_added(bool): checks whether the added sequence is part of original file or added file
         offset (int): determines the offset from where the element should start
-        length (int): is the length of the piece"""
+        length (int): is the length of the piece
+        """
         self.in_added = in_added
         self.offset = offset
         self.length = length
@@ -38,8 +40,48 @@ class PieceTable:
             raise TypeError("Piece table can only handle int or slice, it can't be {}".format(type(key).__name__))
 
     def insert(self, index, text): #need to use recursion for this method
-        element = _Piece(True, index, len(text))
+        """
+        Takes the index of the text-sequence after which the text needs to be inserted
+        :int index:
+        :str text:
+        """
+        if len(text) == 0:
+            return
 
+        piece_index, piece_offset = self.get_piece_and_offset(index)
+        cur_piece = self.pieces[piece_index]
+
+        added_offset = len(self._added)
+        self._added += text
+        self._text_len += len(text)
+
+        #piece_offset is the exact position for insertion of text in the buffer
+        #while, cur_piece.offset is the starting position of the buffer
+
+        if (
+            cur_piece.in_added and
+            piece_offset == cur_piece.offset + cur_piece.length == added_offset
+        #exact insertion point == end of current piece == end of the add buffer
+        ):
+            cur_piece.length += len(text)
+            return
+
+        insert_pieces = [
+            _Piece(cur_piece.in_added, cur_piece.offset, piece_offset-cur_piece.offset),
+            _Piece(True, added_offset, len(text)),
+            _Piece(cur_piece.in_added, piece_offset, cur_piece.length-(piece_offset-cur_piece.offset)),
+        ]
+
+        #    ========== initially
+        #    ========== ====  (space represents a different buffer)
+        #    ^   ^      ^
+        #    A   B      C
+        # remember the original buffer is read only, change can only be made in the add buffer
+        # A=cur_piece.offset, B=piece_offset, C=added_offset
+
+        insert = list(filter(lambda piece: piece.length > 0, insert_pieces))
+
+        self.pieces = self.replace(piece_index, 1, insert)
 
     def delete(self, index, length):
         """
