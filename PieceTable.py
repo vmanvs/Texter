@@ -34,7 +34,7 @@ class PieceTable:
         if isinstance(key, int):
             return self.string_at(key, 1) #return 1 character from the given index
         elif isinstance(key, slice):
-            start, stop, step = key.indices(len(self))
+            start, stop, step = key.indices(len(self))  #slice.indices returns a tuple with 3 values (start, stop, step), it manages the edge cases for us
             return self.string_at(start, stop-start)[::step]
         else:
             raise TypeError("Piece table can only handle int or slice, it can't be {}".format(type(key).__name__))
