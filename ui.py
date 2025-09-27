@@ -1,6 +1,5 @@
 import curses
 from curses.textpad import Textbox
-from importlib import invalidate_caches
 from typing import Tuple, Optional
 
 from PieceTable import PieceTable
@@ -57,6 +56,7 @@ class Cursor:
 
     #accessor methods
 
+    #>> add a method for getting a slice of string
     def _get_char_at(self, position:int) -> Optional[str]:
         """Returns the character at position on the text"""
         try:
@@ -66,13 +66,117 @@ class Cursor:
         except (IndexError, TypeError):
             return None
 
+    #basic movements
+
+    def move_down(self) -> bool:
+        """Moves the cursor down one line, returns true if successful"""
+        line_end = self._find_line_end(self.position)
+
+        if line_end > len(self.piece_table):
+            return False
+
+        new_line_start = line_end + 1
+        new_line_end = self._find_line_end(new_line_start)
+        new_line_length = new_line_end - new_line_start
+
+        #Move to the preferred column or the end of new line if shorter
+        new_col = min(self.preferred_column, new_line_length)
+        self.position = new_line_start + new_col
+        self.row += 1
+        self.column = new_col
+        return True
+
+    def move_up(self) -> bool:
+        """Move the cursor up one line, returns true if successful"""
+        if self.row == 0 :
+            return False
+
+        line_start = self._find_line_start(self.position)
+
+        if line_start > 0:
+            new_line_end = line_start - 1
+            new_line_start = self._find_line_start(new_line_end)
+            new_line_length = new_line_end - new_line_start
+
+            new_col = min(self.preferred_column, new_line_length)
+            self.position = new_line_start + new_col
+            self.row -= 1
+            self.column = new_col
+            return True
+        return False
+
+    def move_right(self) -> bool:
+        """Moves the cursor left one position, returns true if successful"""
+        if self.position < len(self.piece_table):
+            char = self._get_char_at(self.position)
+            self.position += 1
+
+            if char is '\n':
+                self.row += 1
+                self.column = 0
+                self.preferred_column = 0
+            else:
+                self.column += 1
+                self.preferred_column = self.column
+
+            return True
+        return False
+
+    def move_left(self) -> bool:
+        """Moves the cursor left one position, returns true if successful"""
+
+        if self.position > 0:
+            self.position -= 1
+
+            if self.column > 0:
+                self.column -= 1
+                self.preferred_column = self.column
+            else:
+                self._update_display_position() #need to recalculate position when moving to previous line
+            return True
+        return False
+
+
     #line movements
 
-    def move_down(self):
-        """Moves the cursor down"""
+    def move_to_line_start(self) -> None:
+        """Move to the start of the current line"""
+        line_start = self._find_line_start(self.position)
+        self.position = line_start
+        self.column = 0
+        self.preferred_column = 0
 
+    def move_to_line_end(self) -> None:
+        """Move to the end of the current line"""
+        line_end = self._find_line_end(self.position)
+        line_start = self._find_line_start(self.position)
+
+        self.position = line_end
+        self.column = line_end-line_start
+        self.preferred_column = self.column
+
+        # h e l l o _ w o r l d \n t e s t ( '_' represents space, A = 10, B = 11 and so on)
+        # 0 1 2 3 4 5 6 7 8 9 A  B C D E F    #in the piece table format, the strings will be in a single line and won't be abstracted line-wise
+        # line1 start = 0
+        # line1 end = 11
+        # line2 start = 12
+        # line3 end = 15
+        # column should be in 14-12 = 3 (0 indexed) is correct
+
+    def move_to_document_start(self) -> None:
+        """Move to start of the current document"""
+        self.position = 0
+        self.column = 0
+        self.row = 0
+        self.preferred_column = 0
+
+    def move_to_document_end(self) -> None:
+        """Move the cursor to the end of current document"""
+        self.position = len(self.piece_table)
+        self._update_display_position()
 
     #helper methods
+
     def _update_display_position(self) -> None:
         """Recalculate row and column from current position"""
         self.row = 0
@@ -126,10 +230,11 @@ class Cursor:
         text_length = len(self.piece_table)
 
         while end_pos < text_length:
-            char = self._get_char_at(end_pos + 1)
-            if char is '\n':
+            char = self._get_char_at(end_pos)
+            if char is '\n': #returns upto \n
                 break
             end_pos += 1
 
         self._line_cache[cache_key] = end_pos
         return end_pos
+
