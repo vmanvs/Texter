@@ -177,10 +177,12 @@ class PieceTable:
             piece = self.pieces[i]
 
             if remaining_offset <= piece.length: #if the remaining_offset is within piece, return the piece index and offset to piece
+                print(i, piece.offset+remaining_offset)
                 return i, piece.offset+remaining_offset
+
             remaining_offset -= piece.length
 
-            return IndexError("Text index can't be greater than length of text.")
+        return IndexError("Text index can't be greater than length of text.")
 
 
     def replace(self, index, replace_count, items):
@@ -191,7 +193,7 @@ class PieceTable:
         :returns list[_Pieces]
         """
         #includes whole starting piece---the items---includes the piece after the replacement count effectively removing the pointers to replaced items
-        return self.pieces[index:] + items + self.pieces[index+replace_count:]
+        return self.pieces[:index] + items + self.pieces[index+replace_count:]
 
 
 

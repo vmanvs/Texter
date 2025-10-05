@@ -1,7 +1,8 @@
 import curses
 from curses.textpad import Textbox
+from os import linesep
+from pdb import post_mortem
 from typing import Tuple, Optional
-
 from PieceTable import PieceTable
 
 class Cursor:
@@ -175,6 +176,80 @@ class Cursor:
         self.position = len(self.piece_table)
         self._update_display_position()
 
+    #word movement
+
+    def move_word_left(self) -> bool:
+        """Move cursor to the start of the current word or end of previous word (if cursor at whitespace)"""
+        if self.position == 0:
+            return False
+
+        pos = self.position - 1
+        while pos > 0 and self._is_whitespace(self._get_char_at(pos)): #skip the whitespace, for situations where cursor is at whitespace
+            pos -= 1
+
+        while pos > 0 and not self._is_whitespace(self._get_char_at(pos-1)): #skip the word, note: checks pos-1, until whitespace is returned
+            pos -= 1
+
+        self.set_position(pos)
+        return True
+
+    def move_word_right(self) -> bool:
+        """Move the cursor to the end of current word or the beginning of next word (if cursor at whitespace)"""
+        if self.position >= len(self.piece_table):
+            return False
+
+        pos = self.position
+
+        while pos < len(self.piece_table) and not self._is_whitespace(self._get_char_at(pos)): #skip the current word
+            pos += 1
+        while pos < len(self.piece_table) and self._is_whitespace(self._get_char_at(pos)): #skip the white_space
+            pos += 1
+        self.set_position(pos)
+
+        return True
+
+    #in the move_word_left and move_word_right, it is important to decide whether to check for the word first or the
+    #whitespace, while moving to start of current word or the beginning of previous word, we check for the whitespace first, that
+    #ensures that `not self._is_whitespace(self._get_char_at(pos-1)` functions correctly, if we reverse the order it would skip 2 words
+
+
+    def goto_line(self, line_number: int) -> bool:
+        """Jump to a given line (1-based) in the text editor, returns true if successful"""
+
+        if line_number < 1:
+            return False
+
+        target_line = line_number - 1 #convert to 0-based
+        position = 0
+        current_line = 0
+
+        while position < len(self.piece_table) and current_line < target_line:
+            if self._get_char_at(position) == '\n':
+                current_line += 1
+            position += 1
+
+        if current_line == target_line:
+            self.set_position(position)
+            return True
+        return False
+
+    def get_current_line_number(self) -> int:
+        """Returns the current line number 1-based"""
+        return  self.row+1
+
+    def get_current_line_text(self) -> str:
+        """Returns the content of current line"""
+        line_start = self._find_line_start(self.position)
+        line_end = self._find_line_end(self.position)
+
+        text = []
+        for i in range(line_start, line_end):
+            char = self._get_char_at(i)
+            if char is not None:
+             text.append(char)
+
+        return "".join(text)
+
     #helper methods
 
     def _update_display_position(self) -> None:
@@ -238,3 +313,130 @@ class Cursor:
         self._line_cache[cache_key] = end_pos
         return end_pos
 
+
+class ScreenCursor:
+    """Manage the screen cursor"""
+
+    def __init__(self, logical_cursor: Cursor):
+        self.logical_cursor = logical_cursor
+        self.scroll_x = 0
+        self.scroll_y = 0
+
+
+    def get_screen_position(self) -> Tuple[int, int]:
+        """Returns the screen cursor position (maybe -ve if scrolled off)"""
+        logical_row, logical_column = self.logical_cursor.get_display_position()
+
+        return logical_row-self.scroll_x, logical_column-self.scroll_y
+
+    def is_cursor_visible(self, screen_height: int, screen_width: int) -> bool:
+        """Returns True if the screen cursor is on the screen"""
+        screen_row, screen_column = self.get_screen_position()
+
+        return 0 <= screen_row < screen_height and 0 <= screen_column < screen_width
+
+    def ensure_cursor_visible(self, screen_height: int, screen_width: int, margin: int = 0) -> Tuple[bool, bool]: #understand this better
+        """Adjusts the view so that the cursor is visible on the screen: returns (scrolled_v, scrolled_h)"""
+
+        logical_row, logical_column = self.logical_cursor.get_display_position()
+        scrolled_v = False
+        scrolled_h = False
+
+        if logical_row < screen_height + margin:
+            self.scroll_y = max(0, logical_row - margin)
+            scrolled_v = True
+        elif logical_row >=  self.scroll_y + screen_height - margin:
+            self.scroll_y = logical_row - screen_height + margin + 1
+            scrolled_v = True
+
+        if logical_column > screen_width + margin:
+            self.scroll_x = max(0, logical_column - margin)
+            scrolled_h = True
+        elif logical_column >= self.scroll_x + screen_width - margin:
+            self.scroll_x = logical_column - screen_width + margin + 1
+            scrolled_h = True
+
+        return scrolled_v, scrolled_h
+
+    def scroll_down(self, lines: int = 1) -> None:
+        """Scrolls the cursor down one line"""
+        self.scroll_y += lines
+
+    def scroll_up(self, lines: int = 1) -> None:
+        """Scrolls the cursor up one line"""
+        self.scroll_y = max(0, self.scroll_y - lines) #we shouldn't go less than 0 in the viewport
+
+    def scroll_left(self, columns: int = 1) -> None:
+        """Scrolls the cursor left one column"""
+        self.scroll_x = max(0, self.scroll_x - columns) #we shouldn't go more right than 0th column in the viewport
+
+    def scroll_right(self, columns: int = 1) -> None:
+        """Scrolls the cursor right one column"""
+        self.scroll_x += columns
+
+
+class EditorCursorIntegration:
+    """Integration layer for PieceTable and curses"""
+
+    def __init__(self, piece_table: PieceTable):
+        self.piece_table = piece_table
+        self.cursor = Cursor(piece_table)
+        self.screen_cursor = ScreenCursor(self.cursor)
+
+    def handle_text_change(self):
+        """To be called after every text change"""
+        self.cursor.invalidate_cache()
+        self.cursor.clamp_position()
+
+    def inset_at_cursor(self, text: str) -> None:
+        """Insert text at the given position"""
+        self.piece_table.insert(self.cursor.position, text)
+        self.cursor.set_position(self.cursor.position + len(text))
+        self.handle_text_change()
+
+    def delete_at_cursor(self, length: int = 1, backward: bool = True) -> None:
+        """Delete text at the given position"""
+        if backward: #i.e. from a higher index to a lower index, which will dominate most cases
+            if self.cursor.position >= length:
+                self.piece_table.delete(self.cursor.position - length, length)
+                self.cursor.set_position(self.cursor.position - length)
+                self.handle_text_change()
+
+        else:
+            if self.cursor.position + length <= len(self.piece_table):
+                self.piece_table.delete(self.cursor.position, length)
+
+        self.handle_text_change()
+
+    def handle_keypress(self, key: int) -> bool:
+        """Handle key presses, returns true is successful"""
+        if key == curses.KEY_LEFT:
+            return self.cursor.move_left()
+        elif key == curses.KEY_RIGHT:
+            return self.cursor.move_right()
+        elif key == curses.KEY_UP:
+            return self.cursor.move_up()
+        elif key == curses.KEY_DOWN:
+            return self.cursor.move_down()
+        elif key == curses.KEY_HOME:
+             self.cursor.move_to_line_start()
+             return True
+        elif key == curses.KEY_END:
+            self.cursor.move_to_line_end()
+            return True
+        elif key == curses.KEY_PPAGE:
+        elif key == curses.KEY_NPAGE:
+
+
+        #manage word movements (CTRL + Left, CTRL + Right)
+
+        elif key == 545:
+            self.cursor.move_word_right()
+        elif key == 546:
+            self.cursor.move_word_left()
+
+        return False
+
+    def render_text(self, stdscr, screen_height: int, screen_width: int):
+        """Render text to screen"""
+        
