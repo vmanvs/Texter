@@ -160,11 +160,11 @@ class PieceTable:
         self.pieces = self.replace(start_piece_index, delete_count, delete)
 
 
-    def get_piece_and_offset(self, index):
+    def get_piece_and_offset(self, index):  ##check this function
         """
         Essentially translates: logical position x in the combined text to; piece:y, position_in_buffer(piece):z
         :param index:
-        :return:
+        :return tuple(piece index,
         """
 
         if index < 0:
@@ -172,6 +172,7 @@ class PieceTable:
 
         #start from the given index
         remaining_offset = index
+
         #compare the index to piece length
         for i in range(len(self.pieces)):
             piece = self.pieces[i]

@@ -1,7 +1,7 @@
 import curses
-from curses.textpad import Textbox
-from os import linesep
-from pdb import post_mortem
+import os.path
+from _ast import arg
+from fileinput import filename
 from typing import Tuple, Optional
 from PieceTable import PieceTable
 
@@ -58,6 +58,7 @@ class Cursor:
     #accessor methods
 
     #>> add a method for getting a slice of string
+
     def _get_char_at(self, position:int) -> Optional[str]:
         """Returns the character at position on the text"""
         try:
@@ -335,7 +336,8 @@ class ScreenCursor:
 
         return 0 <= screen_row < screen_height and 0 <= screen_column < screen_width
 
-    def ensure_cursor_visible(self, screen_height: int, screen_width: int, margin: int = 0) -> Tuple[bool, bool]: #understand this better
+    def ensure_cursor_visible(self, screen_height: int, screen_width: int,
+                              margin: int = 0) -> Tuple[bool, bool]: #understand this better
         """Adjusts the view so that the cursor is visible on the screen: returns (scrolled_v, scrolled_h)"""
 
         logical_row, logical_column = self.logical_cursor.get_display_position()
@@ -345,6 +347,7 @@ class ScreenCursor:
         if logical_row < screen_height + margin:
             self.scroll_y = max(0, logical_row - margin)
             scrolled_v = True
+
         elif logical_row >=  self.scroll_y + screen_height - margin:
             self.scroll_y = logical_row - screen_height + margin + 1
             scrolled_v = True
@@ -374,6 +377,230 @@ class ScreenCursor:
         """Scrolls the cursor right one column"""
         self.scroll_x += columns
 
+
+class TextEditor:
+    def __init__(self, filename:Optional[str] = None):
+        self.filename = filename
+        self.modified = False
+
+        if filename and os.path.exists(filename):
+            with open(filename, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.piece_table = PieceTable(content)
+        else:
+            self.piece_table = PieceTable("")
+
+        self.cursor = Cursor(self.piece_table)
+        self.screen_cursor = ScreenCursor(self.cursor)
+        self.mode = "NORMAL" #supported: NORMAL, INSERT, COMMAND
+        self.message = ""
+        self.command_buffer = "" #input for the command buffer
+
+    def handle_text_change(self):
+        """To be called after every text change"""
+        self.cursor.invalidate_cache()
+        self.cursor.clamp_position()
+
+    def inset_at_cursor(self, text: str) -> None:
+        """Insert text at the given position"""
+        self.piece_table.insert(self.cursor.position, text)
+        self.cursor.set_position(self.cursor.position + len(text))
+        self.handle_text_change()
+
+
+    def delete_at_cursor(self, length: int = 1, backward: bool = True) -> None:
+        """Delete text at the given position"""
+        if backward: #i.e. from a higher index to a lower index, which will dominate most cases
+            if self.cursor.position >= length:
+                self.piece_table.delete(self.cursor.position - length, length)
+                self.cursor.set_position(self.cursor.position - length)
+                self.handle_text_change()
+
+        else:
+            if self.cursor.position + length <= len(self.piece_table):
+                self.piece_table.delete(self.cursor.position, length)
+
+        self.handle_text_change()
+
+
+    def save_file(self, filename: Optional[str] = None):
+        """Save the current buffer to a file"""
+        if filename:
+            self.filename = filename
+
+        if not self.filename:
+            return "No file name specified"
+
+        try:
+            content = self.piece_table.get_text()
+            with open(self.filename, 'w', encoding='utf-8') as f:
+                f.write(content)
+            self.modified = False
+            return True, f"Saved the file  to {self.filename}"
+        except Exception as e:
+            return False, f"Error saving the file: {str(e)}"
+
+    def open_file(self,  filename: Optional[str] = None):
+        """Open a file"""
+
+        if not os.path.exists(filename):
+            return f"{filename} does not exist at the given path"
+
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                content = f.read()
+            self.piece_table = PieceTable(content)
+            self.cursor = Cursor(self.piece_table)
+            self.screen_cursor = ScreenCursor(self.cursor)
+            self.filename = filename
+            self.modified = False
+            return True, f"Opened {filename}"
+        except Exception as e:
+            return False, f"Error opening the file: {str(e)}"
+
+    def handle_keypress(self, key: int) -> bool:
+        if key == curses.KEY_LEFT:
+            return self.cursor.move_left()
+        elif key == curses.KEY_RIGHT:
+            return self.cursor.move_right()
+        elif key == curses.KEY_UP:
+            return self.cursor.move_up()
+        elif key == curses.KEY_DOWN:
+            return self.cursor.move_down()
+        elif key == curses.KEY_F2:
+            self.cursor.move_to_line_start()
+            return True
+        elif key == curses.KEY_F3:
+            self.cursor.move_to_line_end()
+            return True
+        elif key == curses.KEY_PPAGE:
+            for _ in range(20):
+                if not self.cursor.move_up(): #call self.cursor.move_up() 20 times or until it returns false
+                     break
+            return True
+        elif key == curses.KEY_NPAGE:       #same explanation as above
+            for _ in range(20):
+                if not self.cursor.move_down():
+                    break
+            return True
+        return False
+
+    def render_text(self, stdscr, screen_height: int, screen_width: int):
+        """Render the text from the piece table onto the screen"""
+
+        try:
+            text = self.piece_table.get_text()
+            lines = text.split('\n') # foo.split() returns a list of substrings
+
+            for i, line in enumerate(lines[self.screen_cursor.scroll_y:
+                                     self.screen_cursor.scroll_y + screen_height]): #slice the list from the current_row
+                                                                                    # to the current_row + screen height
+                if i >= screen_height:
+                    break
+
+                display_line = line[self.screen_cursor.scroll_x: self.screen_cursor.scroll_x + screen_width] #slice the characters in a row
+                                                                                                    #from current_column to current_column+screen_width
+                try:
+                    stdscr.addstr(i, 0, display_line)
+                except curses.error:
+                    pass
+
+        except Exception:
+            stdscr.addstr(0, 0, "Error reading text")
+
+    def render_status_bar(self, stdscr, screen_height: int, screen_width: int):
+        """Render the status bar on the bottom displaying current mode, filename, if buffer has been modified,
+         to input text in command mode and current logical position"""
+        try:
+            #Mode indicator
+            mode_str = f" {self.mode}"
+            if mode_str == "INSERT":
+                attr = curses.A_REVERSE | curses.A_BOLD #A_REVERSE -> reverses foreground and background colors, A_BOLD is bold mode
+            elif mode_str == "COMMAND":
+                attr = curses.A_REVERSE
+            else:
+                attr = curses.A_REVERSE | curses.A_DIM #A_DIM is dim mode
+
+            #left side: mode and insert indicator
+
+            left_side = mode_str
+            if self.filename:
+                left_side += f" {os.path.basename(self.filename)}"
+            if self.modified:
+                left_side += " [+]"
+
+            right_side = f" Ln {self.cursor.row + 1}, Col {self.cursor.column + 1}, Position {self.cursor.position}"
+
+            spacing = screen_width - len(left_side) - len(right_side)
+
+            status_line = left_side + " "*max(0, spacing) + right_side
+            status_line = status_line[:screen_width-1]
+
+            stdscr.addstr(screen_height-2, 0, status_line, attr)
+
+            if self.mode == "COMMAND":
+                cmd_line = ":" + self.command_buffer
+                stdscr.addstr(screen_height-1, 0, cmd_line[:screen_width - 1])
+            elif self.message:
+                stdscr.addstr(screen_height-1, 0, self.message[:screen_width-1])
+            else:
+                stdscr.addstr(screen_height-1, 0, ""*(screen_width-1)) #empty line
+
+        except curses.error:
+            pass
+
+    def render_cursor(self, stdscr, screen_height: int, screen_width: int):
+        """Render the cursor on the screen, at the given logical position"""
+        self.screen_cursor.ensure_cursor_visible(screen_height, screen_width)
+        screen_row, screen_column = self.screen_cursor.get_screen_position()
+
+        if 0 <= screen_row < screen_height and 0 <= screen_column < screen_width:
+            try:
+                stdscr.move(screen_row, screen_column)
+            except curses.error:
+                pass
+
+    def execute_command(self, command: str):
+        """Execute the given command in command mode"""
+        parts = command.strip().split(maxsplit=1) #strip remove the leading and trailing whitespace,
+                                                  #split(maxsplit=1) breaks the string into to 2 parts, if no delimiter is specified
+                                                  #split is done by whitespaces
+        if not parts:
+            return
+
+        cmd = parts[0]
+        args = parts[1] if len(parts) > 1 else None
+
+        if cmd in ('q', 'quit'):
+            if self.modified:
+                self.message = "Unsaved changes! Use :q! to force quit or :wq to save and quit"
+            else:
+                return 'quit'
+        elif cmd == 'q!':
+            return 'quit'
+        elif cmd in ('w', 'write'): #takes the filename as the args
+            success, msg = self.save_file(args)
+            self.message = msg
+        elif cmd == 'wq':
+            success, msg = self.save_file(args)
+            if success:
+                return 'quit'
+        elif cmd in ('e', 'edit'):
+            if args:
+                success, msg = self.open_file(args)
+                self.message = msg
+            else:
+                self.message = "Usage: :e <filename>"
+        elif cmd in ('o', 'open'):
+            if args:
+                success, msg = self.open_file(args)
+                self.message = msg
+            else:
+                self.message = "Usage: :o <filename>"
+        else:
+            self.message = f"Unknown command: {cmd}"
+
+        return None
 
 class EditorCursorIntegration:
     """Integration layer for PieceTable and curses"""
