@@ -14,12 +14,12 @@ class Cursor:
         self.preferred_column = 0  #remembered column for vertical movements
 
         self._line_cache = {} #cache line start and end positions
-        self._cache_version = 0 #invalidate cache when text changes
+        self._last_text_change = len(piece_table)
 
     def invalidate_cache(self) -> None:
         """Clears cache when the text is modified"""
         self._line_cache.clear()
-        self._last_text_change = len(self.piece_table) #>>review whether this should be in init
+        self._last_text_change = len(self.piece_table)
 
     def _check_text_change(self):
         """Check if the text has changed and invalidate cache if needed"""
@@ -111,7 +111,7 @@ class Cursor:
             char = self._get_char_at(self.position)
             self.position += 1
 
-            if char is '\n':
+            if char == '\n':
                 self.row += 1
                 self.column = 0
                 self.preferred_column = 0
@@ -326,7 +326,7 @@ class ScreenCursor:
         """Returns the screen cursor position (maybe -ve if scrolled off)"""
         logical_row, logical_column = self.logical_cursor.get_display_position()
 
-        return logical_row-self.scroll_x, logical_column-self.scroll_y
+        return logical_row-self.scroll_y, logical_column-self.scroll_x
 
     def is_cursor_visible(self, screen_height: int, screen_width: int) -> bool:
         """Returns True if the screen cursor is on the screen"""
@@ -342,7 +342,7 @@ class ScreenCursor:
         scrolled_v = False
         scrolled_h = False
 
-        if logical_row < screen_height + margin:
+        if logical_row < self.scroll_y + margin:
             self.scroll_y = max(0, logical_row - margin)
             scrolled_v = True
 
@@ -350,7 +350,7 @@ class ScreenCursor:
             self.scroll_y = logical_row - screen_height + margin + 1
             scrolled_v = True
 
-        if logical_column > screen_width + margin:
+        if logical_column > self.scroll_x + margin:
             self.scroll_x = max(0, logical_column - margin)
             scrolled_h = True
         elif logical_column >= self.scroll_x + screen_width - margin:
@@ -580,6 +580,13 @@ class TextEditor:
                 if not self.cursor.move_down():
                     break
             return True
+        # manage word movements (CTRL + Left, CTRL + Right)
+        elif key == 545:
+            if self.cursor.move_word_right():
+                return True
+        elif key == 546:
+            if self.cursor.move_word_left():
+                return True
         return False
 
     def render_text(self, stdscr, screen_height: int, screen_width: int) -> None:
@@ -609,7 +616,7 @@ class TextEditor:
 
                             abs_pos = line_start_pos + self.screen_cursor.scroll_x + col_idx #start of line + col offset + position of char
                             try:
-                                if selection_range[0] < abs_pos <= selection_range[1]:
+                                if selection_range[0] <= abs_pos < selection_range[1]:
                                     stdscr.addstr(i, col_idx, char, curses.A_REVERSE)
                                 else:
                                     stdscr.addstr(i, col_idx, char)
@@ -621,7 +628,7 @@ class TextEditor:
 
                         if remaining > 0:
                             try:
-                                stdscr.addstr(i, len(display_line), ""*remaining)
+                                stdscr.addstr(i, len(display_line), " "*remaining)
                             except curses.error:
                                 pass
 
@@ -741,71 +748,5 @@ class TextEditor:
 
         return None
 
-class EditorCursorIntegration:
-    """Integration layer for PieceTable and curses"""
 
-    def __init__(self, piece_table: PieceTable):
-        self.piece_table = piece_table
-        self.cursor = Cursor(piece_table)
-        self.screen_cursor = ScreenCursor(self.cursor)
-
-    def handle_text_change(self) -> None:
-        """To be called after every text change"""
-        self.cursor.invalidate_cache()
-        self.cursor.clamp_position()
-
-    def inset_at_cursor(self, text: str) -> None:
-        """Insert text at the given position"""
-        self.piece_table.insert(self.cursor.position, text)
-        self.cursor.set_position(self.cursor.position + len(text))
-        self.handle_text_change()
-
-    def delete_at_cursor(self, length: int = 1, backward: bool = True) -> None:
-        """Delete text at the given position"""
-        if backward: #i.e. from a higher index to a lower index, which will dominate most cases
-            if self.cursor.position >= length:
-                self.piece_table.delete(self.cursor.position - length, length)
-                self.cursor.set_position(self.cursor.position - length)
-                self.handle_text_change()
-
-        else:
-            if self.cursor.position + length <= len(self.piece_table):
-                self.piece_table.delete(self.cursor.position, length)
-
-        self.handle_text_change()
-
-    def handle_keypress(self, key: int) -> bool:
-        """Handle key presses, returns true is successful"""
-        if key == curses.KEY_LEFT:
-            return self.cursor.move_left()
-        elif key == curses.KEY_RIGHT:
-            return self.cursor.move_right()
-        elif key == curses.KEY_UP:
-            return self.cursor.move_up()
-        elif key == curses.KEY_DOWN:
-            return self.cursor.move_down()
-        elif key == curses.KEY_HOME:
-             self.cursor.move_to_line_start()
-             return True
-        elif key == curses.KEY_END:
-            self.cursor.move_to_line_end()
-            return True
-        elif key == curses.KEY_PPAGE:
-            for _ in range(20):
-                if not self.cursor.move_up():
-                    break
-            return True
-        elif key == curses.KEY_NPAGE:
-            for _ in range(20):
-                if not self.cursor.move_down():
-                    break
-            return True
-        #manage word movements (CTRL + Left, CTRL + Right)
-        elif key == 545:
-            if self.cursor.move_word_right():
-                return True
-        elif key == 546:
-            if self.cursor.move_word_left():
-                return True
-        return False
         
