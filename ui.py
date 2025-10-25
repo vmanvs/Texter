@@ -1,7 +1,5 @@
 import curses
 import os.path
-from _ast import arg
-from fileinput import filename
 from typing import Tuple, Optional
 from PieceTable import PieceTable
 
@@ -392,16 +390,115 @@ class TextEditor:
 
         self.cursor = Cursor(self.piece_table)
         self.screen_cursor = ScreenCursor(self.cursor)
-        self.mode = "NORMAL" #supported: NORMAL, INSERT, COMMAND
+        self.mode = "NORMAL" #supported: NORMAL, INSERT, COMMAND, VISUAL
         self.message = ""
         self.command_buffer = "" #input for the command buffer
+
+        ##Copy and Paste operations
+        self.clipboard = ""       #this is an internal clipboard that is separate from OS
+        self.selection_start = None  #start of selection
+        self.selection_end = None    #end of selection
 
     def handle_text_change(self):
         """To be called after every text change"""
         self.cursor.invalidate_cache()
         self.cursor.clamp_position()
 
-    def inset_at_cursor(self, text: str) -> None:
+    def get_selection_range(self) -> Optional[Tuple[int, int]]:
+        """Get the selection range once in visual mode"""
+        if self.selection_start is None and self.selection_end is None:
+            return None
+        else:
+            start = min(self.selection_start, self.selection_end)
+            end = max(self.selection_start, self.selection_end)
+            return start, end
+
+    def clear_selection(self) -> None:
+        """Clear the current selection"""
+        self.selection_start = None
+        self.selection_end = None
+
+    def copy_selection(self) -> None:
+        """Copy the current selection to the internal clipboard"""
+        selection = self.get_selection_range()
+        if not selection:
+            self.message = "No text selected."
+            return
+
+        start, end = selection
+        try:
+            self.clipboard = self.piece_table[start:end]  #test this thoroughly
+            self.message = f"Copied {end-start} characters to clipboard."
+
+        except Exception as e:
+            self.message = f"Failed to copy selection: {e}"
+
+    def cut_selection(self) -> None:
+        """Cut the current selection to the clipboard"""
+        selection = self.get_selection_range()
+        if not selection:
+            self.message = "No text selected."
+            return
+
+        start, end = selection
+        try:
+            self.clipboard = self.piece_table[start:end]
+            self.piece_table.delete(start, end-start)
+            self.cursor.set_position(start)
+            self.handle_text_change()
+            self.message = f"Cut {end-start} characters to clipboard."
+        except Exception as e:
+            self.message = f"Failed to cut selection: {e}"
+
+    def paste_clipboard(self) -> None:
+        """Paste the text in clipboard at the cursor position"""
+        if not self.clipboard:
+            self.message = "The clipboard is empty."
+            return
+
+        try:
+            self.insert_at_cursor(self.clipboard)
+            self.message = f"Pasted {len(self.clipboard)} characters."
+        except Exception as e:
+            self.message = f"Failed to paste clipboard: {e}"
+
+    def copy_line(self) -> None:
+        """Copy the current line to the clipboard"""
+        line_start = self.cursor._find_line_start(self.cursor.position)
+        line_end = self.cursor._find_line_end(self.cursor.position)
+
+        try:
+            #Include the new line character if it exists
+            if line_end < len(self.piece_table):
+                line_end += 1
+            self.clipboard = self.piece_table[line_start:line_end]
+            self.message = f"Copied Line."
+        except Exception as e:
+            self.message = f"Failed to copy line: {e}"
+
+    def delete_line(self) -> None:
+        """Delete the current line"""
+        line_start = self.cursor._find_line_start(self.cursor.position)
+        line_end = self.cursor._find_line_end(self.cursor.position)
+
+        try:
+            #Include newline character if exits
+            if line_end < len(self.piece_table):
+                line_end += 1
+
+            if line_end - line_start > 0:
+                self.piece_table.delete(line_start, line_end-line_start)
+                self.cursor.set_position(line_start)
+                self.handle_text_change()
+                self.message = f"Deleted {line_end-line_start} characters."
+        except Exception as e:
+            self.message = f"Failed to delete line: {e}"
+        self.cursor.invalidate_cache()
+        self.cursor.clamp_position()
+        self.modified = True
+
+
+    def insert_at_cursor(self, text: str) -> None:
         """Insert text at the given position"""
         self.piece_table.insert(self.cursor.position, text)
         self.cursor.set_position(self.cursor.position + len(text))
@@ -485,30 +582,72 @@ class TextEditor:
             return True
         return False
 
-    def render_text(self, stdscr, screen_height: int, screen_width: int):
+    def render_text(self, stdscr, screen_height: int, screen_width: int) -> None:
         """Render the text from the piece table onto the screen"""
 
         try:
             text = self.piece_table.get_text()
             lines = text.split('\n') # foo.split() returns a list of substrings
 
-            for i, line in enumerate(lines[self.screen_cursor.scroll_y:
-                                     self.screen_cursor.scroll_y + screen_height]): #slice the list from the current_row
-                                                                                    # to the current_row + screen height
-                if i >= screen_height:
-                    break
+            #Get selection range if in VISUAL mode
+            selection_range = self.get_selection_range() if self.mode == 'VISUAL' else None
 
-                display_line = line[self.screen_cursor.scroll_x: self.screen_cursor.scroll_x + screen_width] #slice the characters in a row
-                                                                                                    #from current_column to current_column+screen_width
-                try:
-                    stdscr.addstr(i, 0, display_line)
-                except curses.error:
-                    pass
 
-        except Exception:
-            stdscr.addstr(0, 0, "Error reading text")
+            for i in range(screen_height):
+                line_idx = self.screen_cursor.scroll_y + i
 
-    def render_status_bar(self, stdscr, screen_height: int, screen_width: int):
+                if line_idx < len(lines):
+                    line = lines[line_idx]
+                    display_line = line[self.screen_cursor.scroll_x: self.screen_cursor.scroll_x + screen_width]
+
+                    #Calculate absolute position for highlighting
+                    if selection_range: #char by char render only if line contains the selection start index
+                        line_start_pos = sum(len(lines[j])+1 for j in range(line_idx)) #find the index at which line starts
+
+                        #Render Line with selection highlight
+                        for col_idx, char in enumerate(display_line):
+
+                            abs_pos = line_start_pos + self.screen_cursor.scroll_x + col_idx #start of line + col offset + position of char
+                            try:
+                                if selection_range[0] < abs_pos <= selection_range[1]:
+                                    stdscr.addstr(i, col_idx, char, curses.A_REVERSE)
+                                else:
+                                    stdscr.addstr(i, col_idx, char)
+                            except curses.error:
+                                pass
+
+                        #Pad rest of the line (on dynamic changes since terminal screen is stateful)
+                        remaining = screen_width - 1 - len(display_line)
+
+                        if remaining > 0:
+                            try:
+                                stdscr.addstr(i, len(display_line), ""*remaining)
+                            except curses.error:
+                                pass
+
+                        #since the selection is cleared as soon as we exit visual mode, the effect on performance
+                        #due to char by char render is minimal in most cases
+
+                    else: #no selection normal render
+                        display_line = display_line.ljust(screen_width)[:screen_width-1]
+                        try:
+                            stdscr.addstr(i, 0, display_line)
+                        except curses.error:
+                            pass
+
+                else: #Empty line padding for lines beyond document end
+                    display_line = "" * (screen_width-1)
+                    try:
+                        stdscr.addstr(i, 0, display_line)
+                    except curses.error:
+                        pass
+        except Exception as e:
+            try:
+                stdscr.addstr(0, 0, f"Error: {str(e)}"[:screen_width - 1])
+            except curses.error:
+                pass
+
+    def render_status_bar(self, stdscr, screen_height: int, screen_width: int) -> None:
         """Render the status bar on the bottom displaying current mode, filename, if buffer has been modified,
          to input text in command mode and current logical position"""
         try:
@@ -560,7 +699,7 @@ class TextEditor:
             except curses.error:
                 pass
 
-    def execute_command(self, command: str):
+    def execute_command(self, command: str) -> Optional[str]:
         """Execute the given command in command mode"""
         parts = command.strip().split(maxsplit=1) #strip remove the leading and trailing whitespace,
                                                   #split(maxsplit=1) breaks the string into to 2 parts, if no delimiter is specified
@@ -610,7 +749,7 @@ class EditorCursorIntegration:
         self.cursor = Cursor(piece_table)
         self.screen_cursor = ScreenCursor(self.cursor)
 
-    def handle_text_change(self):
+    def handle_text_change(self) -> None:
         """To be called after every text change"""
         self.cursor.invalidate_cache()
         self.cursor.clamp_position()
@@ -652,18 +791,21 @@ class EditorCursorIntegration:
             self.cursor.move_to_line_end()
             return True
         elif key == curses.KEY_PPAGE:
+            for _ in range(20):
+                if not self.cursor.move_up():
+                    break
+            return True
         elif key == curses.KEY_NPAGE:
-
-
+            for _ in range(20):
+                if not self.cursor.move_down():
+                    break
+            return True
         #manage word movements (CTRL + Left, CTRL + Right)
-
         elif key == 545:
-            self.cursor.move_word_right()
+            if self.cursor.move_word_right():
+                return True
         elif key == 546:
-            self.cursor.move_word_left()
-
+            if self.cursor.move_word_left():
+                return True
         return False
-
-    def render_text(self, stdscr, screen_height: int, screen_width: int):
-        """Render text to screen"""
         
