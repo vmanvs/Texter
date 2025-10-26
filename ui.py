@@ -1,6 +1,6 @@
 import curses
 import os.path
-from typing import Tuple, Optional
+from typing import Optional
 from PieceTable import PieceTable
 
 class Cursor:
@@ -34,7 +34,7 @@ class Cursor:
         """Returns the logical position of the cursor in the text"""
         return self.position
 
-    def get_display_position(self) -> Tuple[int,int]:
+    def get_display_position(self) -> tuple[int,int]:
         """Returns the position(row, col) of the cursor"""
         return self.row, self.column
 
@@ -258,7 +258,7 @@ class Cursor:
 
         for i in range(self.position):
             char = self._get_char_at(i)
-            if char is '\n':
+            if char == '\n':
                 self.row += 1
                 self.column = 0
             else:
@@ -280,7 +280,7 @@ class Cursor:
         start_pos = position
         while start_pos > 0:
             char = self._get_char_at(start_pos - 1) #check the char at position before current position
-            if char is '\n':
+            if char == '\n':
                 break
             start_pos -= 1
 
@@ -305,7 +305,7 @@ class Cursor:
 
         while end_pos < text_length:
             char = self._get_char_at(end_pos)
-            if char is '\n': #returns upto \n
+            if char == '\n': #returns upto \n
                 break
             end_pos += 1
 
@@ -322,20 +322,15 @@ class ScreenCursor:
         self.scroll_y = 0
 
 
-    def get_screen_position(self) -> Tuple[int, int]:
+    def get_screen_position(self) -> tuple[int, int]:
         """Returns the screen cursor position (maybe -ve if scrolled off)"""
         logical_row, logical_column = self.logical_cursor.get_display_position()
 
         return logical_row-self.scroll_y, logical_column-self.scroll_x
 
-    def is_cursor_visible(self, screen_height: int, screen_width: int) -> bool:
-        """Returns True if the screen cursor is on the screen"""
-        screen_row, screen_column = self.get_screen_position()
-
-        return 0 <= screen_row < screen_height and 0 <= screen_column < screen_width
 
     def ensure_cursor_visible(self, screen_height: int, screen_width: int,
-                              margin: int = 0) -> Tuple[bool, bool]: #understand this better
+                              margin: int = 0) -> tuple[bool, bool]: #understand this better
         """Adjusts the view so that the cursor is visible on the screen: returns (scrolled_v, scrolled_h)"""
 
         logical_row, logical_column = self.logical_cursor.get_display_position()
@@ -350,7 +345,7 @@ class ScreenCursor:
             self.scroll_y = logical_row - screen_height + margin + 1
             scrolled_v = True
 
-        if logical_column > self.scroll_x + margin:
+        if logical_column < self.scroll_x + margin:
             self.scroll_x = max(0, logical_column - margin)
             scrolled_h = True
         elif logical_column >= self.scroll_x + screen_width - margin:
@@ -404,7 +399,7 @@ class TextEditor:
         self.cursor.invalidate_cache()
         self.cursor.clamp_position()
 
-    def get_selection_range(self) -> Optional[Tuple[int, int]]:
+    def get_selection_range(self) -> Optional[tuple[int, int]]:
         """Get the selection range once in visual mode"""
         if self.selection_start is None and self.selection_end is None:
             return None
@@ -520,7 +515,7 @@ class TextEditor:
         self.handle_text_change()
 
 
-    def save_file(self, filename: Optional[str] = None):
+    def save_file(self, filename: Optional[str] = None) -> str | tuple[bool, str]:
         """Save the current buffer to a file"""
         if filename:
             self.filename = filename
@@ -748,5 +743,138 @@ class TextEditor:
 
         return None
 
+    def run(self, stdscr):
+        """Main editor loop"""
+        curses.curs_set(1) #switch visibility
+        stdscr.keypad(True)
 
-        
+        #Enable Colors if available
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()
+
+        while True:
+            height, width = stdscr.getmaxyx()
+
+            text_height = height - 2 #reserve 2 line for status bar
+
+            #Clear entire screen properly
+            stdscr.erase()
+
+            #Render text
+            self.render_text(stdscr, text_height, width)
+
+            #Render status bar
+            self.render_status_bar(stdscr, height, width)
+
+            #Position Cursor
+            if self.mode == "COMMAND":
+                #Cursor in command mode
+                try:
+                    stdscr.move(height-1, len(self.command_buffer)+1)
+                except curses.error:
+                    pass
+            else:
+                self.render_cursor(stdscr, text_height, width)
+
+            stdscr.refresh()
+
+            #Handle input
+
+            key = stdscr.getch()
+
+            if self.mode == "NORMAL":
+                if key == ord('i'):
+                    self.mode = "INSERT"
+                    self.message = "-- INSERT -- (ESC, Ctrl+C, or F1 to exit)"
+                elif key == ord('v'):
+                    self.mode = "VISUAL"
+                    self.selection_start = self.cursor.position
+                    self.selection_end = self.cursor.position
+                    self.message = "-- VISUAL -- (y=copy, d/x=cut, c=cut->mode:INSERT,ESC=cancel)"
+                elif key == ord(':'):
+                    self.mode = "COMMAND"
+                    self.command_buffer = ""
+                    self.message = ""
+                elif key == ord('q'):
+                    if self.modified:
+                        self.message = "Unsaved changes! Use :q! to force quit or :wq to save and quit"
+                    else:
+                        break
+                elif key == ord('s'):
+                    success, msg = self.save_file()
+                    self.message = msg
+                elif key == ord('p'):
+                    self.paste_clipboard()
+                elif key == ord('y'):
+                    self.copy_line()
+                elif key == ord('d'):
+                    self.delete_line()
+                else:
+                    self.handle_keypress(key)
+
+            elif self.mode == "VISUAL":
+                if key in (27, 3, curses.KEY_F1):
+                    self.mode = "NORMAL"
+                    self.clear_selection()
+                    self.message = "Selection cleared"
+                #in the methods below we don't update self.message since the respective methods already do the same
+                elif key == ord('y'):
+                    self.copy_selection()
+                    self.mode = "NORMAL"
+                    self.clear_selection()
+                elif key in (ord('d') or ord('x')):
+                    self.cut_selection()
+                    self.mode = "NORMAL"
+                    self.clear_selection()
+                elif key == ord('c'):
+                    self.copy_selection()
+                    self.mode = "INSERT"
+                    self.clear_selection()
+                    self.message = "-- INSERT -- (ESC, Ctrl+C, or F1 to exit)"
+                else:
+                    #update the selection based on movements
+                     if self.handle_keypress(key):
+                         self.selection_end = self.cursor.position
+
+            elif self.mode == "INSERT":
+                if key in (27, 3, curses.KEY_F1):
+                    self.mode = "NORMAL"
+                    self.message = ""
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    self.delete_at_cursor(1, backward=True)
+                elif key in (curses.KEY_ENTER, 10, 13):
+                    self.insert_at_cursor('\n')
+                elif 32 <= key <= 126:
+                    self.insert_at_cursor(chr(key))
+                else:
+                    self.handle_keypress(key)
+
+            elif self.mode == "COMMAND":
+                if key in (27, 3, curses.KEY_F1):
+                    self.mode = "NORMAL"
+                    self.command_buffer = ""
+                    self.message = ""
+                elif key in (curses.KEY_ENTER, 10, 13):
+                    result = self.execute_command(self.command_buffer)
+                    self.mode = "NORMAL"
+                    self.command_buffer = ""
+                    if result == 'quit':
+                        break
+                elif key in (curses.KEY_BACKSPACE, 127, 8):
+                    self.command_buffer = self.command_buffer[:-1]
+                elif 32 <= key <= 126:
+                    self.command_buffer += chr(key)
+
+
+def main():
+    import sys
+
+    #check for filename argument
+    filename = sys.argv[1] if len(sys.argv) > 1 else None
+
+    editor = TextEditor(filename)
+    curses.wrapper(editor.run)
+
+if __name__ == "__main__":
+    main()
