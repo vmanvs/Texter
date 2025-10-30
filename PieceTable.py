@@ -140,7 +140,7 @@ class PieceTable:
             # Hel
             # new_length = 3-0 = 3 which is correct.
 
-            _Piece(end_piece.in_added, stop_piece_offset, end_piece.length + (stop_piece_offset-end_piece.offset)),
+            _Piece(end_piece.in_added, stop_piece_offset, end_piece.length - (stop_piece_offset-end_piece.offset)),
             # About piece offset: since we are deleting everything before the stop_piece_offset we will push the pointer back to that position
             # Beautiful_World ('_' defines a space character)
             # 0123456789ABCDE (A=10, B=11, C=12,.....)
@@ -160,7 +160,7 @@ class PieceTable:
         self.pieces = self.replace(start_piece_index, delete_count, delete)
 
 
-    def get_piece_and_offset(self, index):  ##check this function
+    def get_piece_and_offset(self, index):  ##check this function  >> Optimization needed
         """
         Essentially translates: logical position x in the combined text to; piece:y, position_in_buffer(piece):z
         :param index:
@@ -174,11 +174,11 @@ class PieceTable:
         remaining_offset = index
 
         #compare the index to piece length
-        for i in range(len(self.pieces)):
+        for i in range(len(self.pieces)):   #>>>>Optimize this linear search
             piece = self.pieces[i]
 
             if remaining_offset <= piece.length: #if the remaining_offset is within piece, return the piece index and offset to piece
-                print(i, piece.offset+remaining_offset)
+                #print(i, piece.offset+remaining_offset)
                 return i, piece.offset+remaining_offset
 
             remaining_offset -= piece.length
