@@ -1,34 +1,18 @@
 import os
 import requests
 
-from pygments.lexer import RegexLexer, bygroups
-from pygments.token import Token, Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import TextArea, Button
 from textual.document._wrapped_document import WrappedDocument
 from textual.document._document import DocumentBase
+from textual.containers import Container
+from textual.strip import Strip
+from rich.style import Style
+from rich.segment import Segment
 from pt_for_textarea import PieceTableDocument
 from typing import Optional
-
-
-Token.GHOSTTEXT = Token.Token.GHOSTTEXT
-
-class GhostTextLexer(RegexLexer):
-    name = "Ghosttext"
-    aliases = ["ghosttext"]
-    tokens = {
-        'root': [
-            #Match the content inside <<GHOST:>>
-            (r'<<GHOST:(.*?)>>', bygroups(Token.GHOSTTEXT)),
-            #Match the content inside <<CONTEXT:>>
-            (r'<<CONTEXT:(.*?)', bygroups(Token.GHOSTTEXT)),
-            #Match everything else and render normally
-            (r'.+?(?=<<)|.$', Text),
-            (r'\n', Text)
-        ]
-    }
 
 
 
@@ -37,11 +21,18 @@ class NewTextArea(TextArea):
         Binding("ctrl+s", "save", "Save File", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+backspace", "delete_word", "Delete Word"),
+        Binding("ctrl+g", "toggle_ghost", "Toggle Ghost Text", show=True),
+        Binding("tab", "accept_ghost", "Accept Ghost", show=False),
     ]
 
     def __init__(self, **kwargs):
-
         super().__init__(**kwargs)
+        self._ghost_active = False
+        self._ghost_text = ""
+        self._ghost_start = (0, 0)
+        self._ghost_end = (0, 0)
+        # Ghost style: grey at 60% opacity
+        self._ghost_style = Style(color="rgb(128,128,128)", dim=True, italic=True)
 
     def _set_document(self, text: str, language: str | None) -> None:
         """Initiate the piece table data structure for the document"""
@@ -63,7 +54,6 @@ class NewTextArea(TextArea):
         self.delete((0,1), (0,0))
 
 
-
     def _on_key(self, event: events.Key) -> None:
         """Auto-close brackets and special characters"""
         auto_pairs = {
@@ -80,24 +70,151 @@ class NewTextArea(TextArea):
             self.move_cursor_relative(columns=-1)
             event.prevent_default()
 
-class OllamaAutocomplete:
-    """Handles Ollama autocomplete requests"""
+    def render_line(self, y: int) -> Strip:
+        """Override render_line to apply custom styling to ghost text."""
+        # Get the default rendered line
+        strip = super().render_line(y)
 
-    def __init__(self, model="gemma3:1b", endpoint="http://localhost:11434"):
-        self.model = model
-        self.endpoint = endpoint
-        self.enabled = True
+        # If no ghost text is active, return the default
+        if not self._ghost_active:
+            return strip
+
+        # Extract the text content from this strip
+        strip_text = ''.join(seg.text for seg in strip._segments)
+
+        # Check if this strip contains any part of our ghost text
+        ghost_lines = self._ghost_text.split('\n')
+
+        # Find which ghost line (if any) appears in this strip
+        matching_ghost_line_idx = None
+        for idx, ghost_line in enumerate(ghost_lines):
+            if ghost_line.strip() and ghost_line.strip() in strip_text:
+                matching_ghost_line_idx = idx
+                break
+
+        if matching_ghost_line_idx is None:
+            return strip
+
+        # Now we need to determine the column range for ghost text on this line
+        ghost_start_row, ghost_start_col = self._ghost_start
+        ghost_end_row, ghost_end_col = self._ghost_end
+
+        # Determine which columns should be styled as ghost
+        # First line of ghost text: start_col to end of line
+        # Middle lines: entire line
+        # Last line: start of line to end_col
+        if matching_ghost_line_idx == 0:
+            # First line of ghost text
+            ghost_col_start = ghost_start_col
+            if len(ghost_lines) == 1:
+                # Single line ghost text
+                ghost_col_end = ghost_start_col + len(ghost_lines[0])
+            else:
+                ghost_col_end = float('inf')  # To end of line
+        elif matching_ghost_line_idx == len(ghost_lines) - 1:
+            # Last line of ghost text
+            ghost_col_start = 0
+            ghost_col_end = len(ghost_lines[matching_ghost_line_idx])
+        else:
+            # Middle line - entire line is ghost
+            ghost_col_start = 0
+            ghost_col_end = float('inf')
+
+        # Apply ghost styling only to the segments within the column range
+        new_segments = []
+        current_col = 0
+
+        for segment in strip._segments:
+            seg_text = segment.text
+            seg_len = len(seg_text)
+            seg_end_col = current_col + seg_len
+
+            # Check if this segment overlaps with ghost column range
+            if seg_end_col <= ghost_col_start or current_col >= ghost_col_end:
+                # No overlap - keep original
+                new_segments.append(segment)
+            elif current_col >= ghost_col_start and seg_end_col <= ghost_col_end:
+                # Fully within ghost range
+                new_segments.append(Segment(seg_text, self._ghost_style))
+            else:
+                # Partial overlap - split the segment
+                if current_col < ghost_col_start < seg_end_col:
+                    # Split at start of ghost
+                    before_len = ghost_col_start - current_col
+                    new_segments.append(Segment(seg_text[:before_len], segment.style))
+
+                    if seg_end_col <= ghost_col_end:
+                        # Rest is ghost
+                        new_segments.append(Segment(seg_text[before_len:], self._ghost_style))
+                    else:
+                        # Also split at end of ghost
+                        ghost_len = ghost_col_end - ghost_col_start
+                        new_segments.append(Segment(seg_text[before_len:before_len + ghost_len], self._ghost_style))
+                        new_segments.append(Segment(seg_text[before_len + ghost_len:], segment.style))
+                elif current_col < ghost_col_end < seg_end_col:
+                    # Split at end of ghost
+                    ghost_len = ghost_col_end - current_col
+                    new_segments.append(Segment(seg_text[:ghost_len], self._ghost_style))
+                    new_segments.append(Segment(seg_text[ghost_len:], segment.style))
+
+            current_col = seg_end_col
+
+
+
+        return Strip(new_segments, strip.cell_length)
+
+
+    def show_ghost_text(self, text: str) -> None:
+        """Display ghost text at the current cursor position in grey.
+
+        The text will appear in grey at 60% opacity.
+        Press Tab to accept the ghost text, or any other key to dismiss it.
+
+        Args:
+            text: The ghost text to display
+        """
+        if self._ghost_active:
+            self.clear_ghost_text()
+
+        cursor_pos = self.selection.end
+        self._ghost_start = cursor_pos
+        self._ghost_text = text
+
+        # Log for debugging
+        self.app.log(f"Ghost text starting at position: {cursor_pos}")
+
+        # Insert the text normally
+        self.insert(text, cursor_pos)
+
+        # Calculate end position
+        end_row, end_col = cursor_pos
+        lines_in_ghost = text.count('\n')
+        if lines_in_ghost > 0:
+            last_line = text.split('\n')[-1]
+            self._ghost_end = (end_row + lines_in_ghost, len(last_line))
+        else:
+            self._ghost_end = (end_row, end_col + len(text))
+
+        # Log for debugging
+        self.app.log(f"Ghost text ending at position: {self._ghost_end}")
+        self.app.log(f"Ghost text range: rows {self._ghost_start[0]} to {self._ghost_end[0]}")
+
+        # Move cursor back to start of ghost text
+        self.move_cursor(cursor_pos)
+        self._ghost_active = True
+
+        # Force refresh to apply styling
+        self.refresh()
+
 
     def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
         """Get completion from Ollama (non-streaming)"""
-        if not self.enabled:
-            return None
 
         try:
             prompt = context_before
 
             payload = {
-                "model": self.model,
+                "model": "gemma3:1b",
                 "system":"Generate a suitable completion for the given text. *Do not repeat paragraphs from the prompt*. *Do not generate markdown*.",
                 "prompt": prompt,
                 "stream": False,
@@ -109,7 +226,7 @@ class OllamaAutocomplete:
             }
 
             response = requests.post(
-                f"{self.endpoint}/api/generate",
+                f"http://localhost:11434/api/generate",
                 json=payload,
                 timeout=5
             )
@@ -125,9 +242,32 @@ class OllamaAutocomplete:
             return None
 
 
-class Test(App):
 
-    def __init__(self, filename:Optional[str]=None):
+class Test(App):
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+
+    NewTextArea {
+        width: 100%;
+        height: 1fr;
+        border: solid $primary;
+    }
+
+    #button-container {
+        height: auto;
+        padding: 1;
+        background: $boost;
+        dock: bottom;
+    }
+
+    Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, filename: Optional[str] = None):
         super().__init__()
         self.filename = filename if filename else ""
         self.text = ""
@@ -140,38 +280,49 @@ class Test(App):
         """Creates the editor instance once the document is loaded."""
         self.editor = self.query_one(NewTextArea)
 
-    def get_context(self, context_size:int=3000) -> Optional[str]:
+
+    def get_context_before_cursor(self, context_size: int = 3000) -> str:
+        """Get text from a variable number of characters before the cursor to the cursor position."""
+        try:
+            cursor_location = self.editor.selection.end
+            cursor_index = self.editor.document.get_index_from_location(cursor_location)
+            start_index = max(0, cursor_index - context_size)
+            start_location = self.editor.document.get_location_from_index(start_index)
+            context_text = self.editor.document.get_text_range(start_location, cursor_location)
+            return context_text
+        except Exception as e:
+            self.log(f"Error getting context: {e}")
+            return ""
+
+    def get_pos_for_context(self, context_size: int = 3000) -> tuple[tuple[int, int], tuple[int, int]]:
         """Get the start and end position of the current context."""
         try:
-            # Get current cursor position
-            cursor_location = self.editor.selection.end
-
-            # Convert cursor location to index in the document
-            cursor_index = self.editor.document.get_index_from_location(cursor_location)
-
-            # Calculate start index (don't go below 0)
-            start_index = max(0, cursor_index - context_size)
-
-            # Convert start index back to location
+            end_location = self.editor.selection.end
+            end_index = self.editor.document.get_index_from_location(end_location)
+            start_index = max(0, end_index - context_size)
             start_location = self.editor.document.get_location_from_index(start_index)
-
-            # Get the text between start and cursor
-            context_text = self.editor.document.get_text_range(start_location, cursor_location)
-
-            return context_text
-
+            return start_location, end_location
         except Exception as e:
-            self.log(f"Error: {e}")
-            return
+            self.notify(f"Error getting positions: {e}")
+            return (0, 0), (0, 0)
 
-    def on_button_pressed(self, event:Button.Pressed):
-        first_line = self.get_pos_for_context()
-        self.log(f"Lines: {first_line}, Cursor Position:{self.cursor_position}")
+    def on_button_pressed(self, event: Button.Pressed):
+        """Handle button presses for different ghost text operations."""
+        button_id = event.button.id
+
+        if button_id == "show-ghost":
+            # Show some ghost text at cursor
+            context = self.get_context_before_cursor()
+            ghost_suggestion = self.editor.get_completion(context_before=context)
+            self.editor.show_ghost_text(ghost_suggestion)
+            self.notify("Ghost text shown! Press Tab to accept or any key to dismiss.", severity="information")
 
 
     def compose(self) -> ComposeResult:
         yield NewTextArea(text=self.text)
-        yield Button("Get locations", id="get-location-btn")
+        with Container(id="button-container"):
+            yield Button("Show Ghost Text (Ctrl+G)", id="show-ghost", variant="primary")
+
 
 
 
