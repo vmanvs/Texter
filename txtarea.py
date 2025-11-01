@@ -86,39 +86,49 @@ class NewTextArea(TextArea):
         ghost_lines = self._ghost_text.split('\n')
 
         # Find which ghost line (if any) appears in this strip
+        # We need exact matching to avoid styling old ghost text locations
         matching_ghost_line_idx = None
         for idx, ghost_line in enumerate(ghost_lines):
-            if ghost_line.strip() and ghost_line.strip() in strip_text:
+            # Must match the exact ghost line content (not just a substring)
+            if ghost_line and ghost_line in strip_text:
+                # Additional check: make sure this is actually our current ghost text
+                # by verifying the line content matches what should be there
                 matching_ghost_line_idx = idx
                 break
 
         if matching_ghost_line_idx is None:
             return strip
 
-        # Now we need to determine the column range for ghost text on this line
-        ghost_start_row, ghost_start_col = self._ghost_start
-        ghost_end_row, ghost_end_col = self._ghost_end
+        # Get the actual ghost line we're styling
+        ghost_line = ghost_lines[matching_ghost_line_idx]
+
+
+        # Find where in the strip the ghost text actually starts
+        # This handles the issue where ghost text might not start at column 0
+        ghost_text_position_in_strip = strip_text.find(ghost_line)
+        if ghost_text_position_in_strip == -1:
+            return strip  # Ghost line not found in this strip
 
         # Determine which columns should be styled as ghost
-        # First line of ghost text: start_col to end of line
-        # Middle lines: entire line
-        # Last line: start of line to end_col
         if matching_ghost_line_idx == 0:
             # First line of ghost text
-            ghost_col_start = ghost_start_col
+            # The ghost starts at ghost_start_col in the document
+            # But in the rendered strip, it appears at ghost_text_position_in_strip
+            ghost_col_start = ghost_text_position_in_strip
             if len(ghost_lines) == 1:
                 # Single line ghost text
-                ghost_col_end = ghost_start_col + len(ghost_lines[0])
+                ghost_col_end = ghost_col_start + len(ghost_line)
             else:
-                ghost_col_end = float('inf')  # To end of line
+                # Multi-line, first line goes to end
+                ghost_col_end = ghost_col_start + len(ghost_line)
         elif matching_ghost_line_idx == len(ghost_lines) - 1:
             # Last line of ghost text
-            ghost_col_start = 0
-            ghost_col_end = len(ghost_lines[matching_ghost_line_idx])
+            ghost_col_start = ghost_text_position_in_strip
+            ghost_col_end = ghost_col_start + len(ghost_line)
         else:
-            # Middle line - entire line is ghost
-            ghost_col_start = 0
-            ghost_col_end = float('inf')
+            # Middle line - entire ghost line is styled
+            ghost_col_start = ghost_text_position_in_strip
+            ghost_col_end = ghost_col_start + len(ghost_line)
 
         # Apply ghost styling only to the segments within the column range
         new_segments = []
@@ -159,10 +169,7 @@ class NewTextArea(TextArea):
 
             current_col = seg_end_col
 
-
-
         return Strip(new_segments, strip.cell_length)
-
 
     def show_ghost_text(self, text: str) -> None:
         """Display ghost text at the current cursor position in grey.
@@ -205,6 +212,61 @@ class NewTextArea(TextArea):
 
         # Force refresh to apply styling
         self.refresh()
+
+    def clear_ghost_text(self) -> None:
+        """Remove the ghost text from the document."""
+        if not self._ghost_active:
+            return
+
+        try:
+            # Delete the range
+            self.delete(self._ghost_start, self._ghost_end)
+
+            self._ghost_active = False
+            self._ghost_text = ""
+            self._ghost_start = (0, 0)
+            self._ghost_end = (0, 0)
+
+            # Force refresh
+            self.refresh()
+        except Exception as e:
+            # Reset flags on error
+            self._ghost_active = False
+            self._ghost_text = ""
+
+    def accept_ghost_text(self) -> None:
+        """Accept the ghost text and keep it as real text."""
+        if not self._ghost_active:
+            return
+
+        # Move cursor to end of accepted text
+        self.move_cursor(self._ghost_end)
+
+        # Just reset flags - the text is already in the document
+        self._ghost_active = False
+        self._ghost_text = ""
+        self._ghost_start = (0, 0)
+        self._ghost_end = (0, 0)
+
+        # Force refresh to remove styling
+        self.refresh()
+
+    def action_toggle_ghost(self) -> None:
+        """Action to toggle ghost text (for testing)."""
+        if self._ghost_active:
+            self.clear_ghost_text()
+        else:
+            self.show_ghost_text("    # This is grey ghost text\n    return result")
+
+    def action_accept_ghost(self) -> None:
+        """Action to accept ghost text with Tab key."""
+        if self._ghost_active:
+            self.accept_ghost_text()
+
+            return
+        # If no ghost text, let default Tab behavior happen
+        position = self.selection.end
+        self.insert(" "*4, position)
 
 
     def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
@@ -312,8 +374,9 @@ class Test(App):
 
         if button_id == "show-ghost":
             # Show some ghost text at cursor
-            context = self.get_context_before_cursor()
-            ghost_suggestion = self.editor.get_completion(context_before=context)
+            #context = self.get_context_before_cursor()
+            #ghost_suggestion = self.editor.get_completion(context_before=context)
+            ghost_suggestion = "This is a ghost text."
             self.editor.show_ghost_text(ghost_suggestion)
             self.notify("Ghost text shown! Press Tab to accept or any key to dismiss.", severity="information")
 
