@@ -244,7 +244,7 @@ class PieceTableDocument(DocumentBase):
             The corresponding location.
 
         Raises:
-            ValueError: If the index is doesn't correspond to a location in the document.
+            ValueError: If the index doesn't correspond to a location in the document.
         """
         error_message = (
             f"Index {index!r} does not correspond to a location in the document."
@@ -338,6 +338,8 @@ class PieceTableDocument(DocumentBase):
         return self.lines[line_index]
 
 
+
+#TODO: remove this
 # Example usage demonstrating the adapter
 if __name__ == "__main__":
     # Create a document using PieceTable backend

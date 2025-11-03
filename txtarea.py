@@ -1,7 +1,4 @@
 import os
-import requests
-import asyncio
-
 import httpx
 
 from textual import events
@@ -11,13 +8,14 @@ from textual.binding import Binding
 from textual.document._document_navigator import DocumentNavigator
 from textual.widgets import TextArea, Button
 from textual.document._wrapped_document import WrappedDocument
-
-from textual.document._document import DocumentBase
 from textual.containers import Container
 from textual.strip import Strip
+
 from rich.style import Style
 from rich.segment import Segment
+
 from pt_for_textarea import PieceTableDocument
+
 from typing import Optional
 
 
@@ -58,28 +56,6 @@ class NewTextArea(TextArea):
         # Ghost style: grey at 60% opacity
         self._ghost_style = Style(color="rgb(128,128,128)", dim=True, italic=True)
 
-    """def _set_document(self, text: str, language: str | None) -> None:
-        #Initiate the piece table data structure for the document
-
-        document: DocumentBase
-
-        try:
-            document = PieceTableDocument(text)
-        except Exception as e:
-            return
-
-        self.document = document
-        width = self.size.width
-        self.wrapped_document = WrappedDocument(document, tab_width=self.indent_width, width=width)
-    """
-
-    """def on_mount(self) -> None:
-        Fix for rendering glitch where text is offset by one column
-           and the second line is not visible.
-        self.move_cursor_relative(columns=1)
-        self.delete((0,1), (0,0))
-
-    """
 
     def _on_key(self, event: events.Key) -> None:
         """Auto-close brackets and special characters"""
@@ -99,6 +75,7 @@ class NewTextArea(TextArea):
 
     def render_line(self, y: int) -> Strip:
         # Override render_line to apply custom styling to ghost text.
+
         # Get the default rendered line
         strip = super().render_line(y)
 
@@ -199,7 +176,7 @@ class NewTextArea(TextArea):
         return Strip(new_segments, strip.cell_length)
 
     """
-        def normalize_quotes(self, text: str) -> str:
+        def normalize_quotes(self, text: str) -> str: #unoptimized O(n)
             #Convert Unicode quotes to ASCII quotes for matching.
             # Replace various Unicode quotes with ASCII equivalents
             replacements = {
@@ -232,6 +209,7 @@ class NewTextArea(TextArea):
         self._ghost_start = cursor_pos
         self.ghost_text = text
 
+        #TODO: Remove this
         # Log for debugging
         self.app.log(f"Ghost text starting at position: {cursor_pos}")
 
@@ -247,6 +225,7 @@ class NewTextArea(TextArea):
         else:
             self._ghost_end = (end_row, end_col + len(text))
 
+        #TODO: remove this
         # Log for debugging
         self.app.log(f"Ghost text ending at position: {self._ghost_end}")
         self.app.log(f"Ghost text range: rows {self._ghost_start[0]} to {self._ghost_end[0]}")
@@ -303,6 +282,7 @@ class NewTextArea(TextArea):
         # Force refresh to remove styling
         self.refresh()
 
+    #TODO: remove this
     def action_toggle_ghost(self) -> None:
         """Action to toggle ghost text (for testing)."""
         if self._ghost_active:
@@ -392,20 +372,29 @@ class Test(App):
         """Creates the editor instance once the document is loaded."""
         self.editor = self.query_one(NewTextArea)
 
-    def get_context_before_cursor(self, context_size: int = 3000) -> str:
+    def get_context_before_cursor(self, sysprompt="", context_size: int = 3000 ) -> str:
         """Get text from a variable number of characters before the cursor to the cursor position."""
+
         try:
+            if sysprompt and os.path.exists(sysprompt):
+                with open(sysprompt, 'r', encoding='utf-8') as f:
+                    sysprompt = f.read()
+            sysprompt = sysprompt
+
             cursor_location = self.editor.selection.end
             cursor_index = self.editor.document.get_index_from_location(cursor_location)
             start_index = max(0, cursor_index - context_size)
             start_location = self.editor.document.get_location_from_index(start_index)
             context_text = self.editor.document.get_text_range(start_location, cursor_location)
-            sysprompt = "Generate a suitable completion of at least 100 words with meaningful sentences that do not end abruptly for the given text. *Do not repeat paragraphs from the prompt*. *Do not generate markdown*.\n"
+
             return f'{sysprompt} {context_text}'
+
         except Exception as e:
             self.log(f"Error getting context: {e}")
             return ""
 
+
+    #Redundant, might be useful later
     def get_pos_for_context(self, context_size: int = 3000) -> tuple[tuple[int, int], tuple[int, int]]:
         """Get the start and end position of the current context."""
         try:
@@ -418,7 +407,9 @@ class Test(App):
             self.notify(f"Error getting positions: {e}")
             return (0, 0), (0, 0)
 
-    async def handle_ghost(self):
+    async def handle_ghost(self) -> None:
+        """Calls the required methods to render ghost text."""
+
         context = self.get_context_before_cursor()
         # Get the completion
         completion = await self.editor.get_completion(context_before=context)
@@ -427,13 +418,14 @@ class Test(App):
             self.log(f"Got completion: %r " % completion)
 
             self.editor.show_ghost_text(completion)
-                #"This is a ghost text. And this, this my friend is an awfully long ghost text, I dont know why it exists, but the very fact that it exists is pissing me off, this really working, like really really working")
+
         else:
-            text = "“The data streams here aren’t just repeating; they’re fracturing, like a shattered mirror,” Elara stated, herscanner focusing "
+            text = "Error showing the text please try again."
             self.editor.show_ghost_text(text)
 
     async def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses for different ghost text operations."""
+
         button_id = event.button.id
 
         if button_id == "show-ghost":
