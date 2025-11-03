@@ -17,7 +17,7 @@ from textual.containers import Container
 from textual.strip import Strip
 from rich.style import Style
 from rich.segment import Segment
-from pt_for_textarea2 import PieceTableDocument
+from pt_for_textarea import PieceTableDocument
 from typing import Optional
 
 
@@ -102,98 +102,99 @@ class NewTextArea(TextArea):
         # Get the default rendered line
         strip = super().render_line(y)
 
-        # If no ghost text is active, return the default
-        if not self._ghost_active:
+        # If no ghost text is active, or document isn't set, return the default
+        if not self._ghost_active or not self.document:
             return strip
 
-        # Extract the text content from this strip
-        strip_text = ''.join(seg.text for seg in strip._segments)
+        # Get the absolute vertical offset (display line index)
+        scroll_x, scroll_y = self.scroll_offset
+        absolute_y = scroll_y + y
 
-        # Check if this strip contains any part of our ghost text
-        ghost_lines = self.ghost_text.split('\n')
-
-        # Find which ghost line (if any) appears in this strip
-        # We need exact matching to avoid styling old ghost text locations
-        matching_ghost_line_idx = None
-        for idx, ghost_line in enumerate(ghost_lines):
-            # Must match the exact ghost line content (not just a substring)
-            if ghost_line and ghost_line in strip_text:
-                # Additional check: make sure this is actually our current ghost text
-                # by verifying the line content matches what should be there
-                matching_ghost_line_idx = idx
-                break
-
-        if matching_ghost_line_idx is None:
+        # Get the (row, col) document location for the start of this virtual line `y`.
+        try:
+            # _offset_to_line_info maps absolute_y to (document_line_index, section_index)
+            line_info = self.wrapped_document._offset_to_line_info[absolute_y]
+            doc_row, section_index = line_info
+        except IndexError:
+            # We're rendering a line beyond the document (e.g., empty space)
             return strip
 
-        # Get the actual ghost line we're styling
-        ghost_line = ghost_lines[matching_ghost_line_idx]
+        # This is the (row, col) start and end of the ghost text in the document
+        ghost_start_loc = self._ghost_start
+        ghost_end_loc = self._ghost_end
 
-        # Find where in the strip the ghost text actually starts
-        # This handles the issue where ghost text might not start at column 0
-        ghost_text_position_in_strip = strip_text.find(ghost_line)
-        if ghost_text_position_in_strip == -1:
-            return strip  # Ghost line not found in this strip
+        # If this document row is not part of the ghost text, exit early.
+        if (
+                doc_row < ghost_start_loc[0]
+                or doc_row > ghost_end_loc[0]
+        ):
+            return strip
 
-        # Determine which columns should be styled as ghost
-        if matching_ghost_line_idx == 0:
-            # First line of ghost text
-            # The ghost starts at ghost_start_col in the document
-            # But in the rendered strip, it appears at ghost_text_position_in_strip
-            ghost_col_start = ghost_text_position_in_strip
-            if len(ghost_lines) == 1:
-                # Single line ghost text
-                ghost_col_end = ghost_col_start + len(ghost_line)
-            else:
-                # Multi-line, first line goes to end
-                ghost_col_end = ghost_col_start + len(ghost_line)
-        elif matching_ghost_line_idx == len(ghost_lines) - 1:
-            # Last line of ghost text
-            ghost_col_start = ghost_text_position_in_strip
-            ghost_col_end = ghost_col_start + len(ghost_line)
-        else:
-            # Middle line - entire ghost line is styled
-            ghost_col_start = ghost_text_position_in_strip
-            ghost_col_end = ghost_col_start + len(ghost_line)
+        # This display line IS on a document row that contains ghost text.
+        # We need to find the starting *document column* for this section.
+        try:
+            # get_sections returns the list of wrapped parts for a document line
+            all_sections = self.wrapped_document.get_sections(doc_row)
+            # The starting column is the sum of the lengths of all preceding sections
+            current_doc_col = sum(len(section) for section in all_sections[:section_index])
+        except IndexError:
+            # This should not happen if _offset_to_line_info is correct, but be safe.
+            return strip
 
-        # Apply ghost styling only to the segments within the column range
+        # Now we iterate through the segments of the strip, tracking the *document column*
         new_segments = []
-        current_col = 0
 
         for segment in strip._segments:
             seg_text = segment.text
-            seg_len = len(seg_text)
-            seg_end_col = current_col + seg_len
+            seg_len = len(seg_text)  # Length in characters (codepoints)
 
-            # Check if this segment overlaps with ghost column range
-            if seg_end_col <= ghost_col_start or current_col >= ghost_col_end:
-                # No overlap - keep original
+            # The document (row, col) range for *this specific segment*
+            seg_start_loc = (doc_row, current_doc_col)
+            seg_end_loc = (doc_row, current_doc_col + seg_len)
+
+            # Compare the segment's document location with the ghost's location
+            # (row, col) tuples can be compared directly.
+
+            # 1. Segment is entirely BEFORE ghost text
+            if seg_end_loc <= ghost_start_loc:
                 new_segments.append(segment)
-            elif current_col >= ghost_col_start and seg_end_col <= ghost_col_end:
-                # Fully within ghost range
+
+            # 2. Segment is entirely AFTER ghost text
+            elif seg_start_loc >= ghost_end_loc:
+                new_segments.append(segment)
+
+            # 3. Segment is entirely WITHIN ghost text
+            elif seg_start_loc >= ghost_start_loc and seg_end_loc <= ghost_end_loc:
                 new_segments.append(Segment(seg_text, self._ghost_style))
+
+            # 4. Segment overlaps: starts BEFORE, ends WITHIN ghost
+            elif seg_start_loc < ghost_start_loc < seg_end_loc <= ghost_end_loc:
+                # ghost_start_loc[1] is the ghost's starting column
+                # current_doc_col is the segment's starting column
+                split_index = ghost_start_loc[1] - current_doc_col
+                new_segments.append(Segment(seg_text[:split_index], segment.style))
+                new_segments.append(Segment(seg_text[split_index:], self._ghost_style))
+
+            # 5. Segment overlaps: starts WITHIN, ends AFTER ghost
+            elif ghost_start_loc <= seg_start_loc < ghost_end_loc < seg_end_loc:
+                split_index = ghost_end_loc[1] - current_doc_col
+                new_segments.append(Segment(seg_text[:split_index], self._ghost_style))
+                new_segments.append(Segment(seg_text[split_index:], segment.style))
+
+            # 6. Segment overlaps: ghost is contained entirely WITHIN segment
+            elif seg_start_loc < ghost_start_loc < ghost_end_loc < seg_end_loc:
+                split1_index = ghost_start_loc[1] - current_doc_col
+                split2_index = ghost_end_loc[1] - current_doc_col
+                new_segments.append(Segment(seg_text[:split1_index], segment.style))
+                new_segments.append(Segment(seg_text[split1_index:split2_index], self._ghost_style))
+                new_segments.append(Segment(seg_text[split2_index:], segment.style))
+
+            # 7. Default (should be covered by 1 & 2): segment style is unchanged
             else:
-                # Partial overlap - split the segment
-                if current_col < ghost_col_start < seg_end_col:
-                    # Split at start of ghost
-                    before_len = ghost_col_start - current_col
-                    new_segments.append(Segment(seg_text[:before_len], segment.style))
+                new_segments.append(segment)
 
-                    if seg_end_col <= ghost_col_end:
-                        # Rest is ghost
-                        new_segments.append(Segment(seg_text[before_len:], self._ghost_style))
-                    else:
-                        # Also split at end of ghost
-                        ghost_len = ghost_col_end - ghost_col_start
-                        new_segments.append(Segment(seg_text[before_len:before_len + ghost_len], self._ghost_style))
-                        new_segments.append(Segment(seg_text[before_len + ghost_len:], segment.style))
-                elif current_col < ghost_col_end < seg_end_col:
-                    # Split at end of ghost
-                    ghost_len = ghost_col_end - current_col
-                    new_segments.append(Segment(seg_text[:ghost_len], self._ghost_style))
-                    new_segments.append(Segment(seg_text[ghost_len:], segment.style))
-
-            current_col = seg_end_col
+            # Advance the document column for the next segment
+            current_doc_col += seg_len
 
         return Strip(new_segments, strip.cell_length)
 
@@ -254,6 +255,9 @@ class NewTextArea(TextArea):
         self.move_cursor(cursor_pos)
         self._ghost_active = True
 
+        #CRITICAL, clear line cache so that styling is actually applied
+        self._line_cache.clear()
+
         # Force refresh to apply styling
         self.refresh()
 
@@ -270,6 +274,8 @@ class NewTextArea(TextArea):
             self.ghost_text = ""
             self._ghost_start = (0, 0)
             self._ghost_end = (0, 0)
+
+            self._line_cache.clear()
 
             # Force refresh
             self.refresh()
@@ -291,6 +297,8 @@ class NewTextArea(TextArea):
         self.ghost_text = ""
         self._ghost_start = (0, 0)
         self._ghost_end = (0, 0)
+
+        self._line_cache.clear()
 
         # Force refresh to remove styling
         self.refresh()
@@ -417,9 +425,9 @@ class Test(App):
 
         if completion:
             self.log(f"Got completion: %r " % completion)
-            text = "“The data streams here aren’t just repeating; they’re fracturing, like a shattered mirror,” Elara stated, herscanner focusing on a particularly chaotic cluster of holographic projections—a chaotic collage of Cygnus Prime’s past,"
-            self.editor.show_ghost_text(
-                "This is a ghost text. And this, this my friend is an awfully long ghost text, I dont know why it exists, but the very fact ")
+
+            self.editor.show_ghost_text(completion)
+                #"This is a ghost text. And this, this my friend is an awfully long ghost text, I dont know why it exists, but the very fact that it exists is pissing me off, this really working, like really really working")
         else:
             text = "“The data streams here aren’t just repeating; they’re fracturing, like a shattered mirror,” Elara stated, herscanner focusing "
             self.editor.show_ghost_text(text)

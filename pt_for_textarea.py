@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, overload
+from typing import overload
 
 from PieceTable import PieceTable
-
-if TYPE_CHECKING:
-    from tree_sitter import Node, Query
 
 from textual.document._document import (
     DocumentBase,
@@ -157,7 +154,7 @@ class PieceTableDocument(DocumentBase):
     @property
     def start(self) -> Location:
         """Returns the location of the start of the document (0, 0)."""
-        return (0, 0)
+        return 0, 0
 
     @property
     def end(self) -> Location:
@@ -166,7 +163,7 @@ class PieceTableDocument(DocumentBase):
         if not lines:
             return (0, 0)
         last_line = lines[-1]
-        return (len(lines) - 1, len(last_line))
+        return len(lines) - 1, len(last_line)
 
     def replace_range(self, start: Location, end: Location, text: str) -> EditResult:
         """Replace the text at the given range.
@@ -220,6 +217,55 @@ class PieceTableDocument(DocumentBase):
 
         return EditResult(end_location, replaced_text)
 
+    def get_index_from_location(self, location: Location) -> int:
+        """Given a location, returns the index from the document's text.
+
+                Args:
+                    location: The location in the document.
+
+                Returns:
+                    The index in the document's text.
+                """
+        row, column = location
+        index = row * len(self.newline) + column
+        for line_index in range(row):
+            index += len(self.get_line(line_index))
+        return index
+
+
+
+    def get_location_from_index(self, index: int) -> Location:
+        """Given a codepoint index in the document's text, returns the corresponding location.
+
+        Args:
+            index: The index in the document's text.
+
+        Returns:
+            The corresponding location.
+
+        Raises:
+            ValueError: If the index is doesn't correspond to a location in the document.
+        """
+        error_message = (
+            f"Index {index!r} does not correspond to a location in the document."
+        )
+        if index < 0 or index > len(self.text):
+            raise ValueError(error_message)
+
+        column_index = 0
+        newline_length = len(self.newline)
+        for line_index in range(self.line_count):
+            next_column_index = (
+                column_index + len(self.get_line(line_index)) + newline_length
+            )
+            if index < next_column_index:
+                return line_index, index - column_index
+            elif index == next_column_index:
+                return line_index + 1, 0
+            column_index = next_column_index
+
+        raise ValueError(error_message)
+
     def _location_to_index(self, location: Location) -> int:
         """Convert a (row, column) location to an absolute index in the text.
 
@@ -264,7 +310,7 @@ class PieceTableDocument(DocumentBase):
 
             if index <= line_end_index:
                 column = index - current_index
-                return (row, column)
+                return row, column
 
             # Move past this line and its newline
             current_index = line_end_index + newline_length
