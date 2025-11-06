@@ -1,18 +1,20 @@
 import os
-
 import httpx
 import asyncio
+from time import sleep
 
 from textual import events
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.document._document import EditResult
 from textual.document._document_navigator import DocumentNavigator
+from textual.document._edit import Edit
 from textual.widget import Widget
-from textual.widgets import TextArea, Button, Header, Footer, Label, Input
+from textual.widgets import TextArea, Button, Header, Footer, Label, Input, LoadingIndicator
 from textual.screen import Screen
 from textual.document._wrapped_document import WrappedDocument
-from textual.containers import Container, Middle, VerticalGroup
+from textual.containers import Container
 from textual.strip import Strip
 
 from rich.style import Style
@@ -27,9 +29,9 @@ class NewTextArea(TextArea):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save File", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
-        Binding("ctrl+backspace", "delete_word", "Delete Word"),
-        Binding("ctrl+g", "toggle_ghost", "Toggle Ghost Text", show=True),
-        Binding("tab", "accept_ghost", "Accept Ghost", show=False),
+        Binding("ctrl+backspace", "delete_word", "Delete Word", show=False),
+        Binding("tab", "accept_ghost", "Accept Ghost", show=True),
+        Binding("ctrl+g", "generate_text", "Generate Text", show=True),
     ]
 
     def __init__(self, **kwargs):
@@ -54,6 +56,8 @@ class NewTextArea(TextArea):
         self._rewrap_and_refresh_virtual_size()
 
         self.filename = ""
+        self.modified = False
+        self._quit_after_save = False
 
         self._ghost_active = False
         self.ghost_text = ""
@@ -111,6 +115,12 @@ class NewTextArea(TextArea):
 
         except (httpx.RequestError, Exception):
             return None
+
+    def edit(self, edit: Edit) -> EditResult:
+        """Override edit to track modifications."""
+        if not self.modified:
+            self.modified = True
+        return super().edit(edit)
 
     def render_line(self, y: int) -> Strip:
         # Override render_line to apply custom styling to ghost text.
@@ -321,13 +331,6 @@ class NewTextArea(TextArea):
         # Force refresh to remove styling
         self.refresh()
 
-    # TODO: remove this
-    def action_toggle_ghost(self) -> None:
-        """Action to toggle ghost text (for testing)."""
-        if self._ghost_active:
-            self.clear_ghost_text()
-        else:
-            self.show_ghost_text("    # This is grey ghost text\n    return result")
 
     def action_accept_ghost(self) -> None:
         """Action to accept ghost text with Tab key."""
@@ -343,6 +346,11 @@ class NewTextArea(TextArea):
         """Synchronous file writing function to be run in a thread."""
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(text)
+        self.modified = False
+
+    async  def action_generate_text(self) -> None:
+        """Action to toggle ghost text (for testing)."""
+        await self.app.handle_ghost()
 
     async def handle_save_dialog_result(self, filename: Optional[str]):
         """
@@ -359,11 +367,43 @@ class NewTextArea(TextArea):
                 # Run the blocking I/O in a separate thread
                 await asyncio.to_thread(self._write_file_sync, self.filename, text)
                 self.app.notify(f"{filename} saved to {cwd}")
+                if self._quit_after_save:
+                    self._quit_after_save = False
+                    self.app.exit()
             except Exception as e:
                 self.app.notify(f"Failed to save file: {e}", severity="error")
 
         else:  # User cancelled
             self.app.notify("Save cancelled")
+
+
+    #TODO: test this function
+    async def handle_quit_dialog_result(self, save: Optional[bool]):
+        """
+        Callback for when the QuitScreen is dismissed.
+        """
+        if save is True:
+            result = await self.action_save()
+            if result and result[0]:
+                #Save successful, quit
+                self.app.exit()
+            elif result is None:
+                #Save screen was pushed, set quit after save to true
+                self._quit_after_save = True
+            else:
+                self.app.notify(f"Failed to quit file", severity="error")
+        if save is False:
+            self.app.exit()
+        if save is None:
+            self.app.notify("Quit cancelled")
+
+
+    def action_quit(self) -> None:
+        if self.modified:
+            self.app.push_screen(QuitScreen(), self.handle_quit_dialog_result)
+        else:
+            self.app.exit()
+
 
     async def action_save(self, **kwargs) -> Optional[tuple[bool, str]]:
         """Action to save the file"""
@@ -375,6 +415,7 @@ class NewTextArea(TextArea):
             if self.filename and self.filename != "untitled":
                 # Run the blocking I/O in a separate thread
                 await asyncio.to_thread(self._write_file_sync, self.filename, text)
+
 
                 self.app.notify(f"{self.filename} saved to {cwd}")
                 return True, f"{self.filename} saved"
@@ -420,6 +461,19 @@ class Right(Widget):
         margin-top: 2;
     }
     """
+
+class Center(Widget):
+    """A container which aligns children on the X axis."""
+
+    DEFAULT_CSS = """
+    Center {
+        align-horizontal: center;
+        width: 1fr;
+        height: auto;
+        margin-top: 2;
+    }
+    """
+
 
 
 class AbsCenter(Widget):
@@ -479,9 +533,10 @@ class SaveScreen(Screen[str]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save_btn":
             input_widget = self.query_one("#filename_input", Input)
-            filename = f'{input_widget.value}.txt'
-            if filename.strip():
-                self.dismiss(filename)
+            if input_widget.value != "":
+                filename = f'{input_widget.value}.txt'
+                if filename.strip():
+                    self.dismiss(filename)
             else:
                 self.notify("Please enter a filename")
         elif event.button.id == "cancel_btn":
@@ -495,8 +550,60 @@ class SaveScreen(Screen[str]):
         else:
             self.notify("Please enter a filename")
 
+class QuitScreen(Screen[bool]):
+
+    BINDINGS = [
+        ("escape", "dismiss(None)", "Cancel"),
+        ("ctrl+q", "dismiss(False)", "Force Quit"),
+        ("ctrl+s", "dismiss(True)", "Save"),
+    ]
+
+    CSS = """
+        #label1 {
+            margin-top: 1;
+            margin-bottom: 2;
+        }
+    """
+
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Horizontal, VerticalGroup
+
+        yield Header()
+
+        with AbsCenter():
+            dialog = VerticalGroup(id="dialog")
+            dialog.styles.width = 60
+            dialog.styles.height = 24
+            dialog.styles.border = ("thick", "grey")
+            dialog.styles.background = "black"
+            dialog.styles.padding = (1, 2)
+            dialog.border_title = "Quit"
+
+            with dialog:
+                yield Label(f"The file '{self.app.filename}' was modified, save changes?", id="label1")
+                with Horizontal(classes="button-group"):
+                    with Right():
+                        yield Button(label="Save", variant="primary", id="save_btn")
+                    with Center():
+                        yield Button(label="Force Quit", variant="warning", id='force_quit')
+                    with Left():
+                        yield Button(label="Cancel", variant="default", id="cancel_btn")
+                yield Label("Use 'TAB' or bindings on footer to navigate.")
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+
+        if event.button.id == "save_btn":
+            self.dismiss(True)
+        if event.button.id == "force_quit" :
+            self.dismiss(False)
+        if event.button.id == "cancel_btn":
+            self.dismiss(None)
+
 
 class Test(App):
+
     CSS = """
     /*
     Screen {
@@ -529,6 +636,7 @@ class Test(App):
         super().__init__()
         self.filename = filename if filename else ""
         self.text = ""
+
 
         if filename and os.path.exists(filename):
             with open(filename, 'r', encoding='utf-8') as f:
@@ -581,6 +689,7 @@ class Test(App):
         """Calls the required methods to render ghost text."""
 
         context = self.get_context_before_cursor()
+        self.notify()
         # Get the completion
         completion = await (self.editor.get_completion(context_before=context))
 
@@ -592,6 +701,7 @@ class Test(App):
         else:
             text = "Error showing the text please try again."
             self.editor.show_ghost_text(text)
+
 
     async def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses for different ghost text operations."""
@@ -608,15 +718,18 @@ class Test(App):
         if button_id == "cancel-ghost":
             self.editor.clear_ghost_text()
 
+
+    def action_quit(self) -> None:
+        self.editor.action_quit()
+
     def compose(self) -> ComposeResult:
         yield NewTextArea(text=self.text)
         yield Header()
-        yield Footer()
         with Container(id="button-container"):
             yield Button("Show Ghost Text (Ctrl+G)", id="show-ghost", variant="primary")
             yield Button("Cancel Ghost", id="cancel-ghost", variant="primary")
             yield Button("Accept Ghost", id="accept-ghost", variant="primary")
-
+        yield Footer()
 
 def main():
     import sys
