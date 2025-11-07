@@ -2,6 +2,7 @@ import os
 import httpx
 import asyncio
 from time import sleep
+import threading
 
 from textual import events
 
@@ -11,7 +12,7 @@ from textual.document._document import EditResult
 from textual.document._document_navigator import DocumentNavigator
 from textual.document._edit import Edit
 from textual.widget import Widget
-from textual.widgets import TextArea, Button, Header, Footer, Label, Input, LoadingIndicator
+from textual.widgets import TextArea, Button, Header, Footer, Label, Input, LoadingIndicator, Static
 from textual.screen import Screen
 from textual.document._wrapped_document import WrappedDocument
 from textual.containers import Container
@@ -30,7 +31,7 @@ class NewTextArea(TextArea):
         Binding("ctrl+s", "save", "Save File", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+backspace", "delete_word", "Delete Word", show=False),
-        Binding("tab", "accept_ghost", "Accept Ghost", show=True),
+        Binding("tab", "accept_ghost", "Accept AI", show=True),
         Binding("ctrl+g", "generate_text", "Generate Text", show=True),
     ]
 
@@ -66,8 +67,9 @@ class NewTextArea(TextArea):
         # Ghost style: grey at 60% opacity
         self._ghost_style = Style(color="rgb(128,128,128)", dim=True, italic=True)
 
+    """
     def _on_key(self, event: events.Key) -> None:
-        """Auto-close brackets and special characters"""
+        #Auto-close brackets and special characters
         auto_pairs = {
             '*': '**',
             '(': '()',
@@ -81,6 +83,7 @@ class NewTextArea(TextArea):
             self.insert(auto_pairs[event.character])
             self.move_cursor_relative(columns=-1)
             event.prevent_default()
+    """
 
     async def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
         """Get completion from Ollama (non-streaming)"""
@@ -312,6 +315,45 @@ class NewTextArea(TextArea):
             self._ghost_active = False
             self.ghost_text = ""
 
+    #TODO: cleanup the comments
+    def on_key(self, event: events.Key) -> None:
+        """
+        Handle key presses to:
+        1. Cancel in-progress AI generation.
+        2. Clear active ghost text on any key press (except Tab).
+        """
+
+        # 1. Check if AI is running and cancel it
+        if self.app.ai_task and not self.app.ai_task.done():
+            # Any key press (even modifiers) will cancel the request.
+            self.app.log("Key press detected during AI generation, cancelling...")
+            self.app.cancel_ai_generation()
+            #event.prevent_default()  # Consume the key press
+            return  # Stop all further processing
+
+        # 2. Check if ghost text is active and clear it
+        if self._ghost_active:
+            key = event.key
+
+            # The 'tab' key is handled by 'action_accept_ghost', so we ignore it.
+            if key == "tab":
+                pass
+            # Ignore pure modifier keys (Shift, Ctrl, etc.)
+            elif key in ("shift", "ctrl", "alt", "meta"):
+                pass
+            # Any other key (e.g., 'a', 'backspace', 'enter', 'arrow_up')
+            # will clear the ghost text.
+            else:
+                self.clear_ghost_text()
+                # We DON'T prevent_default() here. We want the key press
+                # (e.g., typing 'a' or pressing 'backspace')
+                # to be processed normally *after* the ghost is cleared.
+
+        # 3. Call the parent implementation
+        # This allows all default behavior (typing, bindings, actions)
+        # to run *after* our logic.
+        super()._on_key(event)
+
     def accept_ghost_text(self) -> None:
         """Accept the ghost text and keep it as real text."""
         if not self._ghost_active:
@@ -332,6 +374,7 @@ class NewTextArea(TextArea):
         self.refresh()
 
 
+
     def action_accept_ghost(self) -> None:
         """Action to accept ghost text with Tab key."""
         if self._ghost_active:
@@ -350,7 +393,22 @@ class NewTextArea(TextArea):
 
     async  def action_generate_text(self) -> None:
         """Action to toggle ghost text (for testing)."""
-        await self.app.handle_ghost()
+
+        if self.app.ai_task:
+            self.app.log(f"AI generator is running")
+            return
+        self.app.ai_task = asyncio.create_task(self.app.handle_ghost_wrapper())
+        self.app.log(f"LLM mounted on thread: id-{threading.current_thread().ident}, name- {threading.current_thread().name}")
+        """try:
+            await self.app.ai_task
+        except asyncio.CancelledError:
+            self.app.log(f"AI generator cancelled")
+        except Exception as e:
+            self.app.log(f"AI generator error: {e}")
+            self.app.clear_status()
+        finally:
+            self.app.ai_task = None
+        """
 
     async def handle_save_dialog_result(self, filename: Optional[str]):
         """
@@ -604,6 +662,7 @@ class QuitScreen(Screen[bool]):
 
 class Test(App):
 
+    #TODO: check the screen prop
     CSS = """
     /*
     Screen {
@@ -618,18 +677,38 @@ class Test(App):
     }
 
     #button-container {
-        height: auto;
-        padding: 1;
+        height: 1;
         background: $boost;
         dock: bottom;
+        layout: horizontal;
+        align: left middle;
     }
 
     Button {
         margin: 0 1;
     }
+    
+    #status-bar {
+        dock: bottom;
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+        background: $boost;
+        display: none; /* Start hidden */
+        padding: 0 1;
+        align: left middle;
+    }
+    
+    #ai-loader {
+        margin-right: 1;
+        width: 60%;
+        display: none; /* Hide loader initially */
+    }
 
-
-
+    #ai-status {
+        width: 1fr;
+        color: $text-muted;
+    }
     """
 
     def __init__(self, filename: Optional[str] = None):
@@ -637,6 +716,7 @@ class Test(App):
         self.filename = filename if filename else ""
         self.text = ""
 
+        self.ai_task: asyncio.Task | None = None
 
         if filename and os.path.exists(filename):
             with open(filename, 'r', encoding='utf-8') as f:
@@ -646,6 +726,7 @@ class Test(App):
         """Sets required attributes, once the app runs."""
         # Creates the editor instance once the document is loaded.
         self.editor = self.query_one(NewTextArea)
+        self.log(f"Main event loop mounted on: id- {threading.current_thread().ident}, name- {threading.current_thread().name}")
 
         # Set Title
         self.title = self.filename
@@ -685,22 +766,85 @@ class Test(App):
             self.notify(f"Error getting positions: {e}")
             return (0, 0), (0, 0)
 
+    def clear_status(self) -> None:
+        """Clears the contents of the status bar and hides it"""
+        try:
+            status_bar = self.query_one("#status-bar")
+            loader = self.query_one("#ai-loader", LoadingIndicator)
+            status_text = self.query_one("#ai-status", Static)
+
+            status_bar.styles.display = "none"
+            loader.styles.display = "none"
+            status_text.update("")
+        except Exception as e:
+            pass #in case widgets not mounted
+
     async def handle_ghost(self) -> None:
         """Calls the required methods to render ghost text."""
 
-        context = self.get_context_before_cursor()
-        self.notify()
-        # Get the completion
-        completion = await (self.editor.get_completion(context_before=context))
+        status_bar = self.query_one("#status-bar")
+        loader = self.query_one("#ai-loader", LoadingIndicator)
+        status_text = self.query_one("#ai-status", Static)
 
-        if completion:
-            self.log(f"Got completion: %r " % completion)
+        try:
+            # --- SHOW "LOADING" STATE ---
+            status_bar.styles.display = "block"
+            loader.styles.display = "block"
+            status_text.update("Generating AI text...")
 
-            self.editor.show_ghost_text(completion)
+            context = self.get_context_before_cursor()
+            # self.notify() # No longer needed, we have a status bar
 
-        else:
-            text = "Error showing the text please try again."
-            self.editor.show_ghost_text(text)
+            # Get the completion
+            completion = await (self.editor.get_completion(context_before=context))
+
+            if completion:
+                self.log(f"Got completion: %r " % completion)
+                self.editor.show_ghost_text(completion)
+                # --- HIDE ON SUCCESS ---
+                self.clear_status()
+
+            else:
+                text = "Error showing the text please try again."
+                self.editor.show_ghost_text(text)
+                # --- SHOW ERROR STATE ---
+                loader.styles.display = "none"
+                status_text.update("[Error] AI generation failed.")
+                # Hide error after 3 seconds
+                self.set_timer(3.0, self.clear_status)
+
+        except Exception as e:
+            self.log(f"Error in handle_ghost: {e}")
+            # --- SHOW EXCEPTION STATE ---
+            loader.styles.display = "none"
+            status_text.update(f"[Error] {e}")
+            self.set_timer(3.0, self.clear_status)
+
+    async def handle_ghost_wrapper(self) -> None:
+        """Wraps handle_ghost to provide cleanup."""
+        try:
+            # Run the actual generation logic
+            await self.handle_ghost()
+
+        except asyncio.CancelledError:
+            self.log(f"AI generator task was cancelled.")
+            # Ensure status is cleared if cancelled
+            self.clear_status()
+
+        except Exception as e:
+            self.log(f"AI generator task error: {e}")
+            # Show a fallback error
+            loader = self.query_one("#ai-loader", LoadingIndicator)
+            status_text = self.query_one("#ai-status", Static)
+            loader.styles.display = "none"
+            status_text.update(f"[Critical Error] {e}")
+            self.set_timer(3.0, self.clear_status)
+
+        finally:
+            # This 'finally' block now runs when the *task* finishes,
+            # not when the *action* finishes.
+            self.log(f"AI task finished, clearing task reference.")
+            self.ai_task = None  # This is the cleanup
 
 
     async def on_button_pressed(self, event: Button.Pressed):
@@ -718,6 +862,12 @@ class Test(App):
         if button_id == "cancel-ghost":
             self.editor.clear_ghost_text()
 
+    def cancel_ai_generation(self) -> None:
+        if self.ai_task:
+            self.ai_task.cancel()
+            self.log(self.ai_task.done())
+            self.log(f"AI generation cancelled.")
+
 
     def action_quit(self) -> None:
         self.editor.action_quit()
@@ -725,11 +875,18 @@ class Test(App):
     def compose(self) -> ComposeResult:
         yield NewTextArea(text=self.text)
         yield Header()
-        with Container(id="button-container"):
-            yield Button("Show Ghost Text (Ctrl+G)", id="show-ghost", variant="primary")
-            yield Button("Cancel Ghost", id="cancel-ghost", variant="primary")
-            yield Button("Accept Ghost", id="accept-ghost", variant="primary")
+
         yield Footer()
+
+        with Container(id="status-bar"):
+            yield Static(id="ai-status")
+
+            yield LoadingIndicator(id="ai-loader")
+
+        #with Container(id="button-container"):
+        #    yield Button("Show Ghost Text (Ctrl+G)", id="show-ghost", variant="primary")
+        #    yield Button("Cancel Ghost", id="cancel-ghost", variant="primary")
+        #    yield Button("Accept Ghost", id="accept-ghost", variant="primary")
 
 def main():
     import sys
