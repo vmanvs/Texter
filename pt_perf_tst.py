@@ -7,7 +7,7 @@ from PieceTable import PieceTable  # Assumes PieceTable.py is in the same dir
 INITIAL_TEXT_SIZE = 2048  # Start with 2KB of text
 NUM_OPERATIONS = 10000  # Total operations to perform
 BATCH_SIZE = 100  # How many ops to average before recording a data point
-INSERT_CHAR = "a large piece of text, qwertyuiopasdfghjklzxcvbnm,"  # Character to insert
+INSERT_CHAR = "a large piece of text"  # Character to insert
 
 
 # -----------------------
