@@ -646,7 +646,7 @@ class SaveScreen(Screen[str]):
 class QuitScreen(Screen[bool]):
 
     BINDINGS = [
-        Binding("ctrl+q", "dismiss(False)", "Force Quit", show=True),
+        Binding("ctrl+d", "dismiss(False)", "Force Quit", show=True),
         Binding("escape", "dismiss(None)", "Cancel", show=True),
         Binding("ctrl+s", "dismiss(True)", "Save", show=True),
     ]
