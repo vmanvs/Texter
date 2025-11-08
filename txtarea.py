@@ -775,7 +775,7 @@ class Test(App):
             start_index = max(0, cursor_index - context_size)
             start_location = self.editor.document.get_location_from_index(start_index)
             context_text = self.editor.document.get_text_range(start_location, cursor_location)
-
+            self.log(context_text)
             return f'{sysprompt} {context_text}'
 
         except Exception as e:

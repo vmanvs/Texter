@@ -76,10 +76,10 @@ ollama serve
 
 ```bash
 # Create new file
-python txtarea.py
+textual run txtarea.py
 
 # Open existing file
-python txtarea.py myfile.txt
+textual run txtarea.py myfile.txt
 ```
 
 ### Keyboard Shortcuts
