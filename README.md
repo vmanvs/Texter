@@ -180,13 +180,6 @@ The editor overrides `render_line()` to apply custom styling:
 
 MIT License - Feel free to use and modify for your projects.
 
-## Contributing
-
-Contributions welcome! Please ensure:
-- Code follows existing style conventions
-- Add tests for new features
-- Update documentation for API changes
-
 ## Acknowledgments
 
 - Built with [Textual](https://github.com/Textualize/textual)
