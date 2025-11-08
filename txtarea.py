@@ -1,8 +1,6 @@
 import os
 import httpx
 import asyncio
-from time import sleep
-import threading
 
 from textual import events
 
@@ -17,6 +15,7 @@ from textual.screen import Screen
 from textual.document._wrapped_document import WrappedDocument
 from textual.containers import Container
 from textual.strip import Strip
+from textual.timer import Timer
 
 from rich.style import Style
 from rich.segment import Segment
@@ -67,6 +66,10 @@ class NewTextArea(TextArea):
         # Ghost style: grey at 60% opacity
         self._ghost_style = Style(color="rgb(128,128,128)", dim=True, italic=True)
 
+        self.auto_generate_enabled: bool = True
+        self._auto_generate_delay: float = 2.0
+        self._auto_generate_timer: Timer | None = None
+
     """
     def _on_key(self, event: events.Key) -> None:
         #Auto-close brackets and special characters
@@ -97,7 +100,7 @@ class NewTextArea(TextArea):
                 "stream": False,
                 "options": {
                     "temperature": 0.3,
-                    "num_predict": 50,
+                    "num_predict": 500,
                     "stop": ["\n\n\n", "```"]
                 }
             }
@@ -261,9 +264,8 @@ class NewTextArea(TextArea):
         self._ghost_start = cursor_pos
         self.ghost_text = text
 
-        # TODO: Remove this
         # Log for debugging
-        self.app.log(f"Ghost text starting at position: {cursor_pos}")
+        #self.app.log(f"Ghost text starting at position: {cursor_pos}")
 
         # Insert the text normally
         self.insert(text, cursor_pos)
@@ -277,10 +279,9 @@ class NewTextArea(TextArea):
         else:
             self._ghost_end = (end_row, end_col + len(text))
 
-        # TODO: remove this
         # Log for debugging
-        self.app.log(f"Ghost text ending at position: {self._ghost_end}")
-        self.app.log(f"Ghost text range: rows {self._ghost_start[0]} to {self._ghost_end[0]}")
+        #self.app.log(f"Ghost text ending at position: {self._ghost_end}")
+        #self.app.log(f"Ghost text range: rows {self._ghost_start[0]} to {self._ghost_end[0]}")
 
         # Move cursor back to start of ghost text
         self.move_cursor(cursor_pos)
@@ -315,12 +316,12 @@ class NewTextArea(TextArea):
             self._ghost_active = False
             self.ghost_text = ""
 
-    #TODO: cleanup the comments
     def on_key(self, event: events.Key) -> None:
         """
         Handle key presses to:
         1. Cancel in-progress AI generation.
         2. Clear active ghost text on any key press (except Tab).
+        3. Implements Debounce Logic for text generation if no input for a spicified period of time.
         """
 
         # 1. Check if AI is running and cancel it
@@ -328,7 +329,6 @@ class NewTextArea(TextArea):
             # Any key press (even modifiers) will cancel the request.
             self.app.log("Key press detected during AI generation, cancelling...")
             self.app.cancel_ai_generation()
-            #event.prevent_default()  # Consume the key press
             return  # Stop all further processing
 
         # 2. Check if ghost text is active and clear it
@@ -349,10 +349,56 @@ class NewTextArea(TextArea):
                 # (e.g., typing 'a' or pressing 'backspace')
                 # to be processed normally *after* the ghost is cleared.
 
+        #---Debounce Logic---
+        if self.auto_generate_enabled:
+            key = event.key
+            if key not in ("shift", "ctrl", "alt", "meta"):
+                #If timer is already running stop it
+                if self._auto_generate_timer:
+                    self._auto_generate_timer.stop()
+                    self.app.log(f"Debounce timer reset.")
+
+            self._auto_generate_timer = self.set_timer(
+                self._auto_generate_delay,
+                self._trigger_auto_generation,
+                name="AutogenDebounce"
+            )
+
+
+
         # 3. Call the parent implementation
         # This allows all default behavior (typing, bindings, actions)
         # to run *after* our logic.
         super()._on_key(event)
+
+    def _trigger_auto_generation(self) -> None:
+        """Called by debounce timer to trigger auto-generation."""
+        if self.auto_generate_enabled:
+            self.app.log(f"Debounce Generation fired.")
+            #Clear Timer Reference
+            self._auto_generate_timer = None
+
+            #Do not generate if feature disabled
+            if not self.auto_generate_enabled:
+                return
+
+            if self.app.ai_task and not self.app.ai_task.done():
+                self.app.log(f"Debounce-Gen skipped: AI-Gen already in progress.")
+                return
+
+            if self._ghost_active:
+                self.app.log(f"Debounce-Gen skipped: Ghost text already active.")
+                return
+
+            if not self.text.strip():
+                self.app.log(f"Debounce-Gen skipped: No text.")
+                return
+
+            #---Checks passed, trigger autogen---
+            self.app.log("Debounce-Gen started.")
+
+            asyncio.create_task(self.action_generate_text())
+
 
     def accept_ghost_text(self) -> None:
         """Accept the ghost text and keep it as real text."""
@@ -398,17 +444,7 @@ class NewTextArea(TextArea):
             self.app.log(f"AI generator is running")
             return
         self.app.ai_task = asyncio.create_task(self.app.handle_ghost_wrapper())
-        self.app.log(f"LLM mounted on thread: id-{threading.current_thread().ident}, name- {threading.current_thread().name}")
-        """try:
-            await self.app.ai_task
-        except asyncio.CancelledError:
-            self.app.log(f"AI generator cancelled")
-        except Exception as e:
-            self.app.log(f"AI generator error: {e}")
-            self.app.clear_status()
-        finally:
-            self.app.ai_task = None
-        """
+
 
     async def handle_save_dialog_result(self, filename: Optional[str]):
         """
@@ -435,7 +471,6 @@ class NewTextArea(TextArea):
             self.app.notify("Save cancelled")
 
 
-    #TODO: test this function
     async def handle_quit_dialog_result(self, save: Optional[bool]):
         """
         Callback for when the QuitScreen is dismissed.
@@ -611,9 +646,9 @@ class SaveScreen(Screen[str]):
 class QuitScreen(Screen[bool]):
 
     BINDINGS = [
-        ("escape", "dismiss(None)", "Cancel"),
-        ("ctrl+q", "dismiss(False)", "Force Quit"),
-        ("ctrl+s", "dismiss(True)", "Save"),
+        Binding("ctrl+q", "dismiss(False)", "Force Quit", show=True),
+        Binding("escape", "dismiss(None)", "Cancel", show=True),
+        Binding("ctrl+s", "dismiss(True)", "Save", show=True),
     ]
 
     CSS = """
@@ -662,14 +697,7 @@ class QuitScreen(Screen[bool]):
 
 class Test(App):
 
-    #TODO: check the screen prop
     CSS = """
-    /*
-    Screen {
-        background: $surface;
-    }
-    */
-
     NewTextArea {
         width: 100%;
         height: 1fr;
@@ -722,11 +750,12 @@ class Test(App):
             with open(filename, 'r', encoding='utf-8') as f:
                 self.text = f.read()
 
+
     def on_mount(self) -> None:
         """Sets required attributes, once the app runs."""
         # Creates the editor instance once the document is loaded.
         self.editor = self.query_one(NewTextArea)
-        self.log(f"Main event loop mounted on: id- {threading.current_thread().ident}, name- {threading.current_thread().name}")
+
 
         # Set Title
         self.title = self.filename
