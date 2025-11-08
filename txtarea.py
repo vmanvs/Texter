@@ -454,7 +454,7 @@ class NewTextArea(TextArea):
         if filename:  # User provided a filename
             text = self.text
             cwd = os.getcwd()
-            self.filename = filename
+            self.filename = f"{filename}.txt"
             self.app.title = filename  # Update app title
 
             try:
@@ -627,7 +627,7 @@ class SaveScreen(Screen[str]):
         if event.button.id == "save_btn":
             input_widget = self.query_one("#filename_input", Input)
             if input_widget.value != "":
-                filename = f'{input_widget.value}.txt'
+                filename = input_widget.value
                 if filename.strip():
                     self.dismiss(filename)
             else:
