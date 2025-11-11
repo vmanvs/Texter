@@ -107,7 +107,7 @@ class NewTextArea(TextArea):
 
             async with httpx.AsyncClient(timeout=20.0) as client:
                 response = await client.post(
-                    f"http://localhost:11434/api/generate",
+                    f"http://ollama:11434/api/generate",
                     json=payload,
                     timeout=20
                 )

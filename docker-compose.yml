@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    volumes:
+      - ./my-files:/app/my-files
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q 'gemma3:1b' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        pid=$$!
+        
+        # Wait for Ollama to be ready
+        sleep 5
+        
+        # Pull the model
+        ollama pull gemma3:1b
+        
+        # Wait for the background process
+        wait $$pid
+
+volumes:
+  my-files:
+  ollama-data:
