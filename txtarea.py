@@ -494,6 +494,7 @@ class NewTextArea(TextArea):
 
 
     def action_quit(self) -> None:
+        self.clear_ghost_text()
         if self.modified:
             self.app.push_screen(QuitScreen(), self.handle_quit_dialog_result)
         else:
@@ -505,6 +506,8 @@ class NewTextArea(TextArea):
         text = self.text
         cwd = os.getcwd()
         cwd = f"{cwd}/my-files/"
+
+        self.clear_ghost_text()
 
         try:
             # Case 1 & 2: We have a valid filename (new or existing)
