@@ -433,6 +433,7 @@ class NewTextArea(TextArea):
 
     def _write_file_sync(self, filename: str, text: str):
         """Synchronous file writing function to be run in a thread."""
+        filename = f"my-files/{filename}"
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(text)
         self.modified = False
@@ -454,6 +455,7 @@ class NewTextArea(TextArea):
         if filename:  # User provided a filename
             text = self.text
             cwd = os.getcwd()
+            cwd = f"{cwd}/my-files/"
             self.filename = f"{filename}.txt"
             self.app.title = filename  # Update app title
 
@@ -502,6 +504,7 @@ class NewTextArea(TextArea):
         """Action to save the file"""
         text = self.text
         cwd = os.getcwd()
+        cwd = f"{cwd}/my-files/"
 
         try:
             # Case 1 & 2: We have a valid filename (new or existing)
