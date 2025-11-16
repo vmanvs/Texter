@@ -5,93 +5,243 @@ A terminal-based text editor built with Python's Textual framework, featuring ef
 ## Features
 
 - **Efficient Text Editing**: Uses a piece table implementation for O(1) insert/delete operations
-- **AI Text Completion**: Real-time text suggestions powered by local LLM (Ollama)
+- **AI Text Completion**: Real-time text suggestions powered by local LLM (Ollama) or external APIs
 - **Ghost Text Preview**: View AI suggestions before accepting them
 - **Auto-generation**: Automatic text suggestions after pausing (debounced)
 - **Terminal-Based UI**: Clean, responsive interface with keyboard shortcuts
 - **File Operations**: Save, load, and manage text files with modification tracking
 
-## Architecture
+## Table of Contents
 
-### Piece Table Implementation
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+  - [Docker Installation (Recommended)](#docker-installation-recommended)
+  - [Manual Installation](#manual-installation)
+- [Usage](#usage)
+- [File Management](#file-management)
+- [Configuration](#configuration)
+  - [Using External AI APIs](#using-external-ai-apis)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Troubleshooting](#troubleshooting)
 
-The editor uses a **piece table** data structure for efficient text manipulation:
+## Prerequisites
 
-- **Two Buffers**: Maintains an immutable `original` buffer and an append-only `added` buffer
-- **Piece Array**: Tracks text segments as pieces containing references to buffer positions
-- **Efficient Operations**: Insert and delete operations only modify the piece array, not the actual text buffers
-- **Benefits**: Constant-time edits, easy undo/redo support, and memory efficiency for large documents
+### For Docker Installation
+- Docker Desktop (Windows/Mac) or Docker Engine (Linux)
+- Docker Compose
 
-The piece table avoids costly string concatenations and copies, making it ideal for text editors handling large files or frequent edits.
-
-### Text Editor Integration
-
-The editor bridges the piece table with Textual's `TextArea` widget through an adapter pattern:
-
-- **PieceTableDocument**: Implements Textual's `DocumentBase` interface
-- **Line Caching**: Maintains a cache of document lines for efficient rendering
-- **Location Translation**: Converts between (row, column) coordinates and absolute text indices
-- **Wrapped Document**: Integrates with Textual's text wrapping and navigation systems
-
-This adapter allows the piece table to work seamlessly with Textual's rich text editing features while maintaining performance benefits.
-
-### LLM Integration
-
-The editor provides AI-powered text completion using a local Ollama instance:
-
-- **Context-Aware**: Sends up to 3000 characters before the cursor as context
-- **Ghost Text Rendering**: Displays AI suggestions in grey, italic text
-- **Non-Blocking**: Uses async/await for smooth UI responsiveness
-- **Cancellable**: User can interrupt generation with any keypress
-- **Auto-Generation**: Triggers suggestions automatically after 2 seconds of inactivity (debounced)
-
-The ghost text appears inline at the cursor position and can be accepted with `Tab` or dismissed by typing.
+### For Manual Installation
+- Python 3.9 or higher
+- pip (Python package installer)
+- Ollama (for local AI completions) - [Download here](https://ollama.ai)
 
 ## Installation
 
-### Prerequisites
+### Docker Installation (Recommended)
 
-- Python 3.9+
-- Ollama running locally with a model installed
+Docker installation handles all dependencies automatically and includes Ollama configuration.
 
-### Setup
+#### Windows
 
-1. Install dependencies:
-```bash
-pip install textual httpx
-```
+1. **Install Docker Desktop**
+   - Download from [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/)
+   - Run the installer and follow the prompts
+   - Restart your computer if prompted
 
-2. Install and start Ollama:
-```bash
-# Install Ollama from https://ollama.ai
-ollama pull gemma3:1b  # or your preferred model
-ollama serve
-```
+2. **Clone or Download the Project**
+   ```powershell
+   git clone https://github.com/vmanvs/Texter.git
+   cd Texter
+   ```
 
-3. Clone this repository and navigate to the directory
+3. **Build and Start Services**
+   ```powershell
+   # Using PowerShell script
+   .\run.ps1 build
+   .\run.ps1 up
+   
+   # Or using docker compose directly
+   docker compose build
+   docker compose up -d
+   ```
+
+4. **Run the Editor**
+   ```powershell
+   # Start with new file
+   .\run.ps1 edit
+   
+   # Open existing file
+   .\run.ps1 edit myfile.txt
+   ```
+
+#### Linux/Mac
+
+1. **Install Docker**
+   ```bash
+   # Linux (Ubuntu/Debian)
+   sudo apt update
+   sudo apt install docker.io docker-compose
+   
+   # Mac - Download Docker Desktop from docker.com
+   ```
+
+2. **Clone or Download the Project**
+   ```bash
+   git clone https://github.com/vmanvs/Texter.git
+   cd Texter
+   ```
+
+3. **Build and Start Services**
+   ```bash
+   # Using Makefile
+   make build
+   make up
+   
+   # Or using docker compose directly
+   docker compose build
+   docker compose up -d
+   ```
+
+4. **Run the Editor**
+   ```bash
+   # Start with new file
+   make edit
+   
+   # Open existing file
+   make edit myfile.txt
+   ```
+
+### Manual Installation
+
+Manual installation gives you more control but requires setting up Ollama separately.
+
+#### Windows
+
+1. **Install Python**
+   - Download Python 3.9+ from [python.org](https://www.python.org/downloads/)
+   - During installation, check "Add Python to PATH"
+
+2. **Install Ollama**
+   - Download from [ollama.ai](https://ollama.ai/download)
+   - Install and start Ollama
+   - Pull the model:
+     ```powershell
+     ollama pull gemma3:1b
+     ```
+
+3. **Install Project Dependencies**
+   ```powershell
+   # Using PowerShell script
+   .\run.ps1 install-local
+   
+   # Or using pip directly
+   pip install -r requirements.txt
+   ```
+
+4. **Configure API Endpoint**
+   
+   Open `txtarea.py` and change line **110** from:
+   ```python
+   f"http://ollama:11434/api/generate",
+   ```
+   to:
+   ```python
+   f"http://localhost:11434/api/generate",
+   ```
+
+5. **Run the Editor**
+   ```powershell
+   # Using PowerShell script
+   .\run.ps1 run-local
+   
+   # Or directly with Python
+   python txtarea.py
+   
+   # Open specific file
+   python txtarea.py myfile.txt
+   ```
+
+#### Linux/Mac
+
+1. **Install Python**
+   ```bash
+   # Linux (Ubuntu/Debian)
+   sudo apt update
+   sudo apt install python3 python3-pip
+   
+   # Mac (using Homebrew)
+   brew install python3
+   ```
+
+2. **Install Ollama**
+   ```bash
+   # Linux
+   curl -fsSL https://ollama.ai/install.sh | sh
+   
+   # Mac
+   brew install ollama
+   
+   # Pull the model
+   ollama pull gemma3:1b
+   
+   # Start Ollama service (if not auto-started)
+   ollama serve
+   ```
+
+3. **Install Project Dependencies**
+   ```bash
+   # Using Makefile
+   make install-local
+   
+   # Or using pip directly
+   pip install -r requirements.txt
+   ```
+
+4. **Configure API Endpoint**
+   
+   Open `txtarea.py` and change line **110** from:
+   ```python
+   f"http://ollama:11434/api/generate",
+   ```
+   to:
+   ```python
+   f"http://localhost:11434/api/generate",
+   ```
+
+5. **Run the Editor**
+   ```bash
+   # Using Makefile
+   make run-local
+   
+   # Or directly with Python
+   python txtarea.py
+   
+   # Open specific file
+   python txtarea.py myfile.txt
+   ```
 
 ## Usage
 
 ### Starting the Editor
 
+**Docker:**
 ```bash
-# Create new file
-textual run txtarea.py
+# Windows
+.\run.ps1 edit [filename]
 
-# Open existing file
-textual run txtarea.py myfile.txt
+# Linux/Mac
+make edit [filename]
 ```
 
-### Keyboard Shortcuts
+**Manual:**
+```bash
+# Windows
+.\run.ps1 run-local [filename]
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+S` | Save file |
-| `Ctrl+Q` | Quit (prompts if unsaved) |
-| `Ctrl+G` | Manually trigger AI completion |
-| `Tab` | Accept ghost text suggestion |
-| `Ctrl+D` | Force quit without saving |
-| `Esc` | Cancel dialog/dismiss ghost text |
+# Linux/Mac
+make run-local [filename]
+python txtarea.py [filename]
+```
 
 ### AI Text Generation
 
@@ -101,80 +251,349 @@ textual run txtarea.py myfile.txt
 4. **Dismissing Suggestions**: Type any key to clear ghost text
 5. **Cancelling Generation**: Press any key during generation to cancel
 
+## File Management
+
+### File Storage Location
+
+**All files are stored in the `my-files/` directory.**
+
+- **Opening Files**: Files should be placed in `my-files/` directory
+  ```bash
+  # File structure
+  project-root/
+  ├── my-files/
+  │   ├── myfile.txt      # Your files here
+  │   └── notes.txt
+  └── txtarea.py
+  ```
+
+- **Saving Files**: When you save a file using `Ctrl+S`, it will be automatically saved to `my-files/`
+  - If the file doesn't exist, you'll be prompted for a filename
+  - The `.txt` extension is added automatically
+  - Files are saved as: `my-files/yourfilename.txt`
+
+- **Creating the Directory**:
+  ```bash
+  # Windows
+  mkdir my-files
+  
+  # Linux/Mac
+  mkdir -p my-files
+  ```
+
+### File Operations
+
+- `Ctrl+S`: Save current file
+- `Ctrl+Q`: Quit (prompts if unsaved changes)
+- `Ctrl+D`: Force quit without saving (when in quit dialog)
+
 ## Configuration
+
+### Basic Settings
 
 Edit these settings in `txtarea.py`:
 
+**AI Model** (Line 96):
 ```python
-# AI model (in NewTextArea.get_completion)
-"model": "gemma3:1b"
-
-# Context size (characters before cursor)
-context_size = 3000
-
-# Auto-generation delay (seconds)
-self._auto_generate_delay = 2.0
+"model": "gemma3:1b"  # Change to your preferred Ollama model
 ```
+
+**Context Size** (Line 653):
+```python
+context_size = 3000  # Characters before cursor sent as context
+```
+
+**Auto-generation Delay** (Line 56):
+```python
+self._auto_generate_delay = 2.0  # Seconds of inactivity before auto-gen
+```
+
+### Using External AI APIs
+
+You can configure the editor to use external AI APIs like Claude, GPT-4, Gemini, etc., instead of local Ollama.
+
+#### Configuration Steps
+
+1. **Locate the API Configuration**
+   
+   Open `txtarea.py` and find the `get_completion` method (around line 96-110).
+
+2. **Replace the API Endpoint and Payload**
+
+   **Current Ollama Configuration (Lines 96-110):**
+   ```python
+   payload = {
+       "model": "gemma3:1b",
+       "prompt": prompt,
+       "stream": False,
+       "options": {
+           "temperature": 0.3,
+           "num_predict": 500,
+           "stop": ["\n\n\n", "```"]
+       }
+   }
+   
+   async with httpx.AsyncClient(timeout=20.0) as client:
+       response = await client.post(
+           f"http://localhost:11434/api/generate",  # Line 110
+           json=payload,
+           timeout=20
+       )
+   ```
+
+#### Example: Using Claude API
+
+```python
+async def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
+    """Get completion from Claude API"""
+    try:
+        prompt = context_before
+        
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 500,
+            "temperature": 0.3,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        }
+        
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                json=payload,
+                headers={
+                    "x-api-key": "YOUR_ANTHROPIC_API_KEY",
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                timeout=20
+            )
+        
+        if response.status_code == 200:
+            data = response.json()
+            completion = data['content'][0]['text'].strip()
+            return completion
+        
+        return None
+        
+    except (httpx.RequestError, Exception):
+        return None
+```
+
+#### Example: Using OpenAI GPT-4
+
+```python
+async def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
+    """Get completion from OpenAI API"""
+    try:
+        prompt = context_before
+        
+        payload = {
+            "model": "gpt-4",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a helpful text completion assistant."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.3,
+            "max_tokens": 500
+        }
+        
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                json=payload,
+                headers={
+                    "Authorization": "Bearer YOUR_OPENAI_API_KEY",
+                    "Content-Type": "application/json"
+                },
+                timeout=20
+            )
+        
+        if response.status_code == 200:
+            data = response.json()
+            completion = data['choices'][0]['message']['content'].strip()
+            return completion
+        
+        return None
+        
+    except (httpx.RequestError, Exception):
+        return None
+```
+
+#### Example: Using Google Gemini
+
+```python
+async def get_completion(self, context_before: str, context_after: str = "") -> Optional[str]:
+    """Get completion from Google Gemini API"""
+    try:
+        prompt = context_before
+        
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": prompt
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 500,
+            }
+        }
+        
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=YOUR_GEMINI_API_KEY",
+                json=payload,
+                timeout=20
+            )
+        
+        if response.status_code == 200:
+            data = response.json()
+            completion = data['candidates'][0]['content']['parts'][0]['text'].strip()
+            return completion
+        
+        return None
+        
+    except (httpx.RequestError, Exception):
+        return None
+```
+
+#### Important Notes for External APIs
+
+1. **API Keys**: Replace placeholder API keys with your actual keys
+2. **Cost**: External APIs typically charge per request - monitor your usage
+3. **Rate Limits**: Be aware of API rate limits to avoid service interruptions
+4. **Timeouts**: Adjust the `timeout` parameter if you experience frequent timeouts
+5. **Error Handling**: The current implementation has basic error handling; consider adding more robust logging
+6. **Security**: Never commit API keys to version control - use environment variables:
+
+```python
+import os
+
+api_key = os.getenv("ANTHROPIC_API_KEY")  # Set via environment variable
+```
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+S` | Save file |
+| `Ctrl+Q` | Quit (prompts if unsaved) |
+| `Ctrl+G` | Manually trigger AI completion |
+| `Tab` | Accept ghost text suggestion |
+| `Ctrl+D` | Force quit without saving (in quit dialog) |
+| `Esc` | Cancel dialog/dismiss ghost text |
+
+## Troubleshooting
+
+### Docker Issues
+
+**Container won't start:**
+```bash
+# Check container logs
+docker compose logs
+
+# Rebuild containers
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+```
+
+**Ollama model not loading:**
+```bash
+# Enter container and pull model manually
+docker compose exec ollama ollama pull gemma3:1b
+```
+
+### Manual Installation Issues
+
+**"Module not found" errors:**
+```bash
+# Reinstall dependencies
+pip install -r requirements.txt --force-reinstall
+```
+
+**Ollama connection refused:**
+```bash
+# Check if Ollama is running
+ollama list
+
+# Start Ollama service
+ollama serve
+
+# Verify endpoint in txtarea.py is set to localhost:11434
+```
+
+**Permission errors on Linux:**
+```bash
+# Add execute permissions to scripts
+chmod +x *.sh
+
+# Run Python with correct permissions
+python3 txtarea.py
+```
+
+### AI Generation Issues
+
+**No AI suggestions appearing:**
+1. Verify Ollama/API is running and accessible
+2. Check the endpoint URL in `txtarea.py` (line 110)
+3. Ensure the model is downloaded: `ollama list`
+4. Check for errors in the application logs
+
+**Slow AI responses:**
+1. Try a smaller model (e.g., `gemma3:1b` instead of larger models)
+2. Reduce context size in configuration
+3. Check your system resources (CPU/RAM usage)
+
+### File Issues
+
+**Files not saving:**
+1. Ensure `my-files/` directory exists
+2. Check write permissions on the directory
+3. Verify disk space availability
+
+**Can't open files:**
+1. Ensure files are in `my-files/` directory
+2. Use correct filename: `python txtarea.py myfile.txt` (not `my-files/myfile.txt`)
 
 ## Project Structure
 
 ```
-├── PieceTable.py           # Core piece table implementation
-├── pt_for_textarea.py      # Textual DocumentBase adapter
-├── txtarea.py              # Main editor application
-└── README.md               # This file
+project-root/
+├── my-files/              # Your text files (create this directory)
+│   └── *.txt
+├── PieceTable.py          # Core piece table implementation
+├── pt_for_textarea.py     # Textual DocumentBase adapter
+├── txtarea.py             # Main editor application
+├── sysprompt.txt          # AI system prompt
+├── requirements.txt       # Python dependencies
+├── Dockerfile             # Docker configuration
+├── docker-compose.yml     # Docker Compose setup
+├── run.ps1                # Windows convenience script
+├── Makefile.txt           # Linux/Mac convenience commands
+└── README.md              # This file
 ```
-
-## How It Works
-
-### Text Editing Flow
-
-1. User types → `NewTextArea` receives keystroke
-2. Edit operation → `PieceTableDocument.replace_range()` called
-3. Piece table updated → Only piece array modified, buffers unchanged
-4. Cache invalidated → Lines cache cleared for re-rendering
-5. UI refreshed → Textual renders updated document
-
-### AI Completion Flow
-
-1. User pauses typing → Debounce timer starts (2 seconds)
-2. Timer fires → Context extracted (3000 chars before cursor)
-3. API request → Sent to local Ollama instance
-4. Response received → Text inserted as "ghost" at cursor
-5. User accepts/dismisses → Ghost text accepted or removed
-
-### Ghost Text Rendering
-
-The editor overrides `render_line()` to apply custom styling:
-
-- Calculates which display lines contain ghost text
-- Splits line segments at ghost text boundaries
-- Applies grey, italic styling to ghost segments
-- Preserves other text styling unchanged
 
 ## Performance Characteristics
 
 - **Insert/Delete**: O(1) - only modifies piece array
 - **Get Text**: O(n) where n = number of pieces
-- **Find Position**: O(p) where p = number of pieces (can be optimized with binary search)
-- **Memory**: O(m) where m = total edited characters (original + additions)
-
-## Limitations
-
-- Requires local Ollama instance
-- No syntax highlighting (can be added)
-- Limited to single-file editing
-- Auto-generation may feel intrusive for some workflows
-
-## Future Improvements
-
-- [ ] Binary search optimization for `get_piece_and_offset()`
-- [ ] Undo/redo stack using piece table checkpoints
-- [ ] Syntax highlighting support
-- [ ] Multi-file tabs
-- [ ] Configurable AI model parameters
-- [ ] Streaming AI responses for longer completions
-- [ ] Custom keybindings configuration
+- **Memory**: O(m) where m = total edited characters
 
 ## License
 
@@ -184,4 +603,4 @@ MIT License - Feel free to use and modify for your projects.
 
 - Built with [Textual](https://github.com/Textualize/textual)
 - AI powered by [Ollama](https://ollama.ai)
-- Piece table concept from classic text editor research - [Charles Crowley](https://www.cs.unm.edu/~crowley/papers/sds.pdf)
+- Piece table concept from [Charles Crowley's research](https://www.cs.unm.edu/~crowley/papers/sds.pdf)

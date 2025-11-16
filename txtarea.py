@@ -752,6 +752,8 @@ class Test(App):
 
         self.ai_task: asyncio.Task | None = None
 
+        filename = f"my-files/{filename}" if filename else ""
+
         if filename and os.path.exists(filename):
             with open(filename, 'r', encoding='utf-8') as f:
                 self.text = f.read()
