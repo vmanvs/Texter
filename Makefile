@@ -40,17 +40,17 @@ clean:
 	@echo "Cleaned up containers, volumes, and local images"
 
 test:
-	docker compose run --rm app python -c "import textual; import httpx; print('Dependencies OK')"
+	docker compose run --rm app python3 -c "import textual; import httpx; print('Dependencies OK')"
 
 edit:
-	@docker compose run --rm app python txtarea.py $(filter-out $@,$(MAKECMDGOALS))
+	@docker compose run --rm app python3 txtarea.py $(filter-out $@,$(MAKECMDGOALS))
 
 install-local:
 	pip install -r requirements.txt
 	@echo "Dependencies installed locally"
 
 run-local:
-	@python txtarea.py $(filter-out $@,$(MAKECMDGOALS))
+	@python3 txtarea.py $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:
