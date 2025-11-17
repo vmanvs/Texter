@@ -1,0 +1,7 @@
+FROM ollama/ollama
+
+# Pre-pull the model
+RUN ollama serve & \
+    sleep 5 && \
+    ollama pull gemma3:1b && \
+    pkill ollama

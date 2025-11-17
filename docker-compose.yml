@@ -13,6 +13,8 @@ services:
       - "11434:11434"
     volumes:
       - ollama-data:/root/.ollama
+    build:
+      dockerfile: Dockerfile.ollama
     healthcheck:
       test: ["CMD-SHELL", "ollama list | grep -q 'gemma3:1b' || exit 1"]
       interval: 15s
