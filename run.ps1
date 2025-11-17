@@ -38,6 +38,30 @@ switch ($Command.ToLower()) {
     }
     "up" {
         docker compose up -d
+        Write-Host "Waiting for Gemma 3 model preload..." -NoNewline -ForegroundColor Cyan
+        
+        $ready = $false
+        $start_time = Get-Date
+
+        # Loop until found or timeout (e.g., 5 minutes)
+        while (-not $ready -and ((Get-Date) - $start_time).TotalSeconds -lt 300) {
+            # Check the last 20 lines of logs for the success message
+            $logs = docker compose logs --tail=20 ollama 2>&1 | Out-String
+            
+            if ($logs -match "Ollama ready with gemma3:1b loaded") {
+                $ready = $true
+            } else {
+                # Print a dot to show activity and wait
+                Write-Host "." -NoNewline -ForegroundColor DarkGray
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if ($ready) {
+            Write-Host "`n✅ System Ready! Model is loaded into memory." -ForegroundColor Green
+        } else {
+            Write-Host "`n⚠️ Timed out waiting for model. Check 'make logs' for errors." -ForegroundColor Red
+        }
     }
     "down" {
         docker compose down

@@ -23,6 +23,10 @@ build:
 
 up:
 	docker compose up -d
+	@echo "Waiting for Gemma 3 to warm up..."
+	@# Loop until the specific log line appears
+	@sh -c 'until docker compose logs --tail=20 ollama 2>&1 | grep -q "Ollama ready with gemma3:1b loaded"; do sleep 2; done'
+	@echo "✅ System Ready! Model is loaded into memory."
 
 down:
 	docker compose down

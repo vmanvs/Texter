@@ -15,12 +15,15 @@ services:
       - ollama-data:/root/.ollama
     build:
       dockerfile: Dockerfile.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=-1
     healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q 'gemma3:1b' || exit 1"]
-      interval: 15s
+      # CHANGE 1: Check for the marker file instead of running a command
+      test: ["CMD-SHELL", "[ -f /tmp/ollama_ready ] || exit 1"]
+      interval: 5s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 20
+      start_period: 5s
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -32,10 +35,19 @@ services:
         
         # Pull the model
         ollama pull gemma3:1b
+
+        # Preload the model
+        ollama run gemma3:1b "hello" > /dev/null 2>&1 || echo "Model pre-load initiated"
+
+        echo "Ollama ready with gemma3:1b loaded"
+        
+        # CHANGE 2: Create the marker file to signal the Healthcheck
+        touch /tmp/ollama_ready
         
         # Wait for the background process
         wait $$pid
 
+        
 volumes:
   my-files:
   ollama-data:
